@@ -4,7 +4,7 @@ import pandas as pd
 import ta
 
 # ==========================================
-# ضع مفاتيح v2 الجديدة هنا بدلاً من النصوص
+# ضع مفاتيح v2 الخاصة بك هنا
 API_KEY = '877403F4-8226-4F94-9C1C-5165D7D1CA86'
 API_SECRET = '6b8560d02507ce8707c88dde66166fccc65edb4d568039c3ed048d3e05905203'
 # ==========================================
@@ -31,9 +31,8 @@ def is_smart_entry(symbol, exchange):
         return False
 
 def start_bot():
-    # البوت جاهز للعمل مع v2
     exchange = ccxt.gateio({'apiKey': API_KEY, 'secret': API_SECRET, 'enableRateLimit': True})
-    print("🚀 تم تشغيل البوت بواسطة API v2... جاري التحليل")
+    print("🚀 تم تشغيل البوت (تم إضافة معلمة السعر لـ v2)... جاري التحليل")
     
     while True:
         for symbol in SYMBOLS:
@@ -41,25 +40,23 @@ def start_bot():
                 if is_smart_entry(symbol, exchange):
                     print(f"🎯 فرصة ذكية في {symbol}! جاري حساب الكمية وشراء...")
                     
-                    # 1. جلب السعر الحالي للعملة
+                    # 1. جلب السعر الحالي
                     ticker = exchange.fetch_ticker(symbol)
                     current_price = ticker['last']
                     
-                    # 2. حساب كمية العملة التي يمكن شراؤها بـ 10 دولار (مع تقريب الرقم لـ 6 خانات عشرية)
+                    # 2. حساب الكمية
                     amount_to_buy = round(TRADE_AMOUNT_USDT / current_price, 6)
-                    
                     print(f"السعر الحالي: {current_price} | سيتم شراء كمية: {amount_to_buy}")
                     
-                    # 3. أمر الشراء الجديد المتوافق مع v2
-                    buy_order = exchange.create_market_buy_order(symbol, amount_to_buy)
+                    # 3. أمر الشراء (تمت إضافة params={'price': current_price} لكي تقبلها v2)
+                    buy_order = exchange.create_market_buy_order(symbol, amount_to_buy, params={'price': current_price})
                     
                     buy_price = buy_order['average']
-                    # 4. معرفة الكمية الفعلية التي اشتراها (مهم للبيع لاحقاً)
                     amount_bought = buy_order['filled'] 
                     
                     print(f"✅ تم الشراء بنجاح! الكمية الفعلية: {amount_bought} بسعر {buy_price}")
                     
-                    # 5. بدء مراقبة الصفقة
+                    # 4. مراقبة الصفقة
                     in_position = True
                     while in_position:
                         ticker = exchange.fetch_ticker(symbol)
@@ -70,18 +67,21 @@ def start_bot():
                         
                         if profit_percent >= TAKE_PROFIT:
                             print("💰 تم جني الربح بنجاح!")
-                            exchange.create_market_sell_order(symbol, amount_bought)
+                            # أمر بيع (تمت إضافة السعر أيضاً)
+                            exchange.create_market_sell_order(symbol, amount_bought, params={'price': new_price})
                             in_position = False
                         elif profit_percent <= STOP_LOSS:
                             print("🛑 وقف خسارة!")
-                            exchange.create_market_sell_order(symbol, amount_bought)
+                            # أمر بيع (تمت إضافة السعر أيضاً)
+                            exchange.create_market_sell_order(symbol, amount_bought, params={'price': new_price})
                             in_position = False
                         
-                        time.sleep(15) # فحص كل 15 ثانية
-                    time.sleep(120) # استراحة بعد كل صفقة
+                        time.sleep(15)
+                    time.sleep(120)
             except Exception as e:
                 print(f"خطأ في {symbol}: {e}")
                 time.sleep(30)
 
 if __name__ == "__main__":
     start_bot()
+
