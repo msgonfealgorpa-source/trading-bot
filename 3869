@@ -2,86 +2,245 @@ import ccxt
 import time
 import pandas as pd
 import ta
+import json
+import os
+from datetime import datetime, timedelta
 
 # ==========================================
-# ضع مفاتيح v2 الخاصة بك هنا
-API_KEY = '877403F4-8226-4F94-9C1C-5165D7D1CA86'
-API_SECRET = '6b8560d02507ce8707c88dde66166fccc65edb4d568039c3ed048d3e05905203'
+# ⚙️ إعدادات الحساب والأمان
 # ==========================================
+API_KEY = 'egAeFM8kVEn7YRKPIHRpJGpDW4GFuHRDHFnRmRqdEWcZxPRAb0qHbvd6T6X3MC94Ffqfgc4BSv9mxbBPXSQ'
+API_SECRET = 'OC7UgGik9WOSjUI6r4AvbqfZIq9O9BrjzC2LRrott95Ewcu2jQHRnjCNQj8sn9ZdKIsAf9ioAkp89xs1e7g'
 
+# 🟢 الأهم: وضع التداول الورقي (True = تداول وهمي للاختبار | False = تداول بمال حقيقي)
+PAPER_TRADING = True  
+
+# ==========================================
+# 📊 إعدادات الاستراتيجية والتداول
+# ==========================================
 SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT']
-TRADE_AMOUNT_USDT = 10 
-TAKE_PROFIT = 1.5  
-STOP_LOSS = -1.0  
+TRADE_AMOUNT_USDT = 10  
 
-def is_smart_entry(symbol, exchange):
-    try:
-        ohlcv = exchange.fetch_ohlcv(symbol, '15m', limit=14)
-        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['rsi'] = ta.momentum.rsi(df['close'], window=14)
-        current_rsi = df['rsi'].iloc[-1]
-        
-        print(f"تحليل {symbol} | قيمة RSI: {current_rsi:.2f}")
-        
-        if current_rsi < 30:
+RSI_OVERSOLD = 35
+TRAILING_ACTIVATION = 1.5 # تفعيل الملاحقة بعد 1.5% ربح
+TRAILING_ATR_MULTIPLIER = 1.0 # مسافة الملاحقة بناءً على تذبذب السوق (ATR)
+COOLDOWN_HOURS = 2 # فترة التبريد بعد ضرب وقف الخسارة
+
+# ملفات الذاكرة
+STATE_FILE = 'bot_state.json'
+COOLDOWN_FILE = 'bot_cooldown.json'
+
+# ==========================================
+# 🧠 دوال الذاكرة وإدارة الحالة
+# ==========================================
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, 'r') as f:
+            return json.load(f)
+    return {
+        'in_trade': False, 'symbol': None, 'buy_price': 0, 
+        'amount': 0, 'highest_price': 0, 'stop_loss': 0, 'atr': 0
+    }
+
+def save_state(state):
+    with open(STATE_FILE, 'w') as f:
+        json.dump(state, f, indent=4)
+
+def load_cooldowns():
+    if os.path.exists(COOLDOWN_FILE):
+        with open(COOLDOWN_FILE, 'r') as f:
+            return json.load(f)
+    return {}
+
+def save_cooldowns(cooldowns):
+    with open(COOLDOWN_FILE, 'w') as f:
+        json.dump(cooldowns, f, indent=4)
+
+def is_cooling_down(symbol, cooldowns):
+    if symbol in cooldowns:
+        cooldown_time = datetime.fromisoformat(cooldowns[symbol])
+        if datetime.now() < cooldown_time:
             return True
-        return False
-    except Exception as e:
-        print(f"خطأ في التحليل: {e}")
-        return False
+    return False
 
+# ==========================================
+# 📈 دوال التحليل الفني (نفس منطقك الممتاز)
+# ==========================================
+def fetch_df(exchange, symbol, timeframe, limit):
+    data = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+    return pd.DataFrame(data, columns=['t','o','h','l','c','v'])
+
+def analyze(symbol, exchange):
+    try:
+        # ===== الاتجاه (1H)
+        df1 = fetch_df(exchange, symbol, '1h', 200)
+        df1['ema200'] = ta.trend.ema_indicator(df1['c'], window=200)
+
+        if df1['c'].iloc[-1] < df1['ema200'].iloc[-1]:
+            return None
+
+        # ===== الدخول (15m)
+        df = fetch_df(exchange, symbol, '15m', 100)
+        df['rsi'] = ta.momentum.rsi(df['c'], 14)
+        df['macd'] = ta.trend.macd_diff(df['c'])
+        df['vol_avg'] = df['v'].rolling(20).mean()
+        df['atr'] = ta.volatility.average_true_range(df['h'], df['l'], df['c'], 14)
+
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
+
+        print(f"📊 {symbol} | RSI:{last['rsi']:.1f} MACD:{last['macd']:.4f}")
+
+        if (
+            last['rsi'] < RSI_OVERSOLD and
+            last['macd'] > prev['macd'] and
+            last['v'] > last['vol_avg']
+        ):
+            return last['atr']
+
+        return None
+
+    except Exception as e:
+        print(f"⚠️ خطأ تحليل {symbol}: {e}")
+        return None
+
+# ==========================================
+# 🏦 دوال التنفيذ (مع دعم التداول الورقي)
+# ==========================================
+def get_balance(exchange):
+    if PAPER_TRADING: return 1000.0 # رصيد وهمي للاختبار
+    try:
+        return exchange.fetch_balance()['USDT']['free']
+    except:
+        return 0
+
+def execute_order(exchange, symbol, qty, side, price):
+    if PAPER_TRADING:
+        action = "شراء" if side == 'buy' else "بيع"
+        print(f"📄 [تداول ورقي] تم {action} {qty} من {symbol} بسعر {price}")
+        return {'filled': qty, 'average': price}
+    else:
+        if side == 'buy':
+            return exchange.create_market_buy_order(symbol, qty)
+        else:
+            return exchange.create_market_sell_order(symbol, qty)
+
+# ==========================================
+# 🚀 المحرك الرئيسي للبوت
+# ==========================================
 def start_bot():
-    exchange = ccxt.gateio({'apiKey': API_KEY, 'secret': API_SECRET, 'enableRateLimit': True})
-    print("🚀 تم تشغيل البوت (تم إضافة معلمة السعر لـ v2)... جاري التحليل")
-    
+    state = load_state()
+    cooldowns = load_cooldowns()
+
+    exchange = ccxt.bingx({
+        'apiKey': API_KEY,
+        'secret': API_SECRET,
+        'enableRateLimit': True,
+        'options': {'defaultType': 'spot'}
+    })
+
+    mode = "الورقي (آمن)" if PAPER_TRADING else "الحقيقي (أموال حقيقية)"
+    print(f"🚀 البوت الاحترافي شغال الآن... الوضع: {mode}")
+
+    if state['in_trade']:
+        print(f"🔄 جاري استئناف صفقة سابقة لعملة: {state['symbol']}")
+
     while True:
-        for symbol in SYMBOLS:
-            try:
-                if is_smart_entry(symbol, exchange):
-                    print(f"🎯 فرصة ذكية في {symbol}! جاري حساب الكمية وشراء...")
+        try:
+            # =========================
+            # 1. إدارة الصفقة المفتوحة
+            # =========================
+            if state['in_trade']:
+                symbol = state['symbol']
+                ticker = exchange.fetch_ticker(symbol)
+                price = ticker['last']
+
+                profit = ((price - state['buy_price']) / state['buy_price']) * 100
+
+                # تحديث أعلى سعر لتفعيل الملاحقة
+                if price > state['highest_price']:
+                    state['highest_price'] = price
+                    save_state(state)
+
+                print(f"⏱️ متابعة {symbol} | السعر: {price} | الربح: {profit:.2f}%")
+
+                sell_reason = None
+
+                # أ. فحص وقف الخسارة
+                if price <= state['stop_loss']:
+                    sell_reason = "🛑 وقف خسارة (Stop Loss)"
+                    # تفعيل التبريد لمنع الدخول الخاطئ مجدداً
+                    cooldowns[symbol] = (datetime.now() + timedelta(hours=COOLDOWN_HOURS)).isoformat()
+                    save_cooldowns(cooldowns)
+
+                # ب. فحص جني الأرباح المتحرك (Dynamic Trailing)
+                elif profit >= TRAILING_ACTIVATION:
+                    # المسافة تتحدد بناءً على ATR وقت الدخول وليس نسبة مئوية ثابتة
+                    trailing_price = state['highest_price'] - (TRAILING_ATR_MULTIPLIER * state['atr'])
                     
-                    # 1. جلب السعر الحالي
-                    ticker = exchange.fetch_ticker(symbol)
-                    current_price = ticker['last']
+                    if price <= trailing_price:
+                        sell_reason = "💰 جني أرباح متحرك (Trailing Take Profit)"
+
+                # تنفيذ البيع إذا تحقق شرط
+                if sell_reason:
+                    print(sell_reason)
+                    execute_order(exchange, symbol, state['amount'], 'sell', price)
                     
-                    # 2. حساب الكمية
-                    amount_to_buy = round(TRADE_AMOUNT_USDT / current_price, 6)
-                    print(f"السعر الحالي: {current_price} | سيتم شراء كمية: {amount_to_buy}")
-                    
-                    # 3. أمر الشراء (تمت إضافة params={'price': current_price} لكي تقبلها v2)
-                    buy_order = exchange.create_market_buy_order(symbol, amount_to_buy, params={'price': current_price})
-                    
-                    buy_price = buy_order['average']
-                    amount_bought = buy_order['filled'] 
-                    
-                    print(f"✅ تم الشراء بنجاح! الكمية الفعلية: {amount_bought} بسعر {buy_price}")
-                    
-                    # 4. مراقبة الصفقة
-                    in_position = True
-                    while in_position:
-                        ticker = exchange.fetch_ticker(symbol)
-                        new_price = ticker['last']
-                        profit_percent = ((new_price - buy_price) / buy_price) * 100
-                        
-                        print(f"⏳ {symbol} | السعر: {new_price} | الربح: {profit_percent:.2f}%")
-                        
-                        if profit_percent >= TAKE_PROFIT:
-                            print("💰 تم جني الربح بنجاح!")
-                            # أمر بيع (تمت إضافة السعر أيضاً)
-                            exchange.create_market_sell_order(symbol, amount_bought, params={'price': new_price})
-                            in_position = False
-                        elif profit_percent <= STOP_LOSS:
-                            print("🛑 وقف خسارة!")
-                            # أمر بيع (تمت إضافة السعر أيضاً)
-                            exchange.create_market_sell_order(symbol, amount_bought, params={'price': new_price})
-                            in_position = False
-                        
-                        time.sleep(15)
-                    time.sleep(120)
-            except Exception as e:
-                print(f"خطأ في {symbol}: {e}")
+                    # تصفير الذاكرة
+                    state = {'in_trade': False, 'symbol': None, 'buy_price': 0, 'amount': 0, 'highest_price': 0, 'stop_loss': 0, 'atr': 0}
+                    save_state(state)
+
+                time.sleep(10)
+                continue
+
+            # =========================
+            # 2. البحث عن فرص جديدة
+            # =========================
+            balance = get_balance(exchange)
+
+            if balance < TRADE_AMOUNT_USDT:
+                print("❌ لا يوجد رصيد كافٍ")
                 time.sleep(30)
+                continue
+
+            for symbol in SYMBOLS:
+                if is_cooling_down(symbol, cooldowns):
+                    print(f"❄️ {symbol} في فترة تبريد، يتم تخطيه.")
+                    continue
+
+                atr = analyze(symbol, exchange)
+
+                if atr:
+                    ticker = exchange.fetch_ticker(symbol)
+                    price = ticker['last']
+                    qty = round(TRADE_AMOUNT_USDT / price, 6)
+
+                    print(f"🎯 فرصة دخول مؤكدة في {symbol}")
+
+                    order = execute_order(exchange, symbol, qty, 'buy', price)
+                    filled = order.get('filled', 0)
+
+                    if filled and filled > 0:
+                        buy_price = order.get('average') or price
+                        
+                        # حفظ البيانات في الذاكرة
+                        state['in_trade'] = True
+                        state['symbol'] = symbol
+                        state['buy_price'] = buy_price
+                        state['amount'] = filled
+                        state['highest_price'] = buy_price
+                        state['stop_loss'] = buy_price - (1.5 * atr) # وقف خسارة ديناميكي
+                        state['atr'] = atr # نحتفظ بـ ATR لاستخدامه في جني الأرباح
+
+                        save_state(state)
+                        print(f"✅ تم الدخول بسعر {buy_price}. وقف الخسارة: {state['stop_loss']:.4f}")
+                        break # إيقاف البحث بمجرد الدخول في صفقة
+
+            time.sleep(20)
+
+        except Exception as e:
+            print(f"❌ خطأ غير متوقع: {e}")
+            time.sleep(30)
 
 if __name__ == "__main__":
     start_bot()
-
