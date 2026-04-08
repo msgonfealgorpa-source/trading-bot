@@ -4,13 +4,17 @@ import pandas as pd
 import ta
 import json
 import os
+import requests # 👉 تم إضافة مكتبة الطلبات للاتصال بتلجرام
 from datetime import datetime, timedelta
 
 # ==========================================
-# ⚙️ إعدادات الحساب والأمان
+# ⚙️ إعدادات الحساب والأمان والتلجرام
 # ==========================================
-API_KEY = 'PUT_YOUR_API_KEY'
-API_SECRET = 'PUT_YOUR_SECRET'
+API_KEY = 'egAeFM8kVEn7YRKPIHRpJGpDW4GFuHRDHFnRmRqdEWcZxPRAb0qHbvd6T6X3MC94Ffqfgc4BSv9mxbBPXSQ'
+API_SECRET = 'OC7UgGik9WOSjUI6r4AvbqfZIq9O9BrjzC2LRrott95Ewcu2jQHRnjCNQj8sn9ZdKIsAf9ioAkp89xs1e7g'
+
+TELEGRAM_TOKEN = '8744586010:AAET91PN6ApW3FiX4WU1nSH_F5xoHuzIQKk'
+TELEGRAM_CHAT_ID = '7520475220'
 
 # 🟢 الأهم: وضع التداول الورقي (True = تداول وهمي للاختبار | False = تداول بمال حقيقي)
 PAPER_TRADING = True  
@@ -39,6 +43,19 @@ COOLDOWN_HOURS = 2 # فترة التبريد بعد ضرب وقف الخسارة
 # ملفات الذاكرة
 STATE_FILE = 'bot_state.json'
 COOLDOWN_FILE = 'bot_cooldown.json'
+
+# ==========================================
+# 📱 دالة إرسال تنبيهات التلجرام
+# ==========================================
+def send_telegram_msg(message):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID or TELEGRAM_TOKEN == 'ضع_هنا_التوكن_الذي_أخذته_من_بوت_فاذر':
+        return # يتجاهل الإرسال إذا لم تقم بوضع التوكن
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': message, 'parse_mode': 'Markdown'}
+        requests.post(url, data=payload)
+    except Exception as e:
+        print(f"❌ خطأ في إرسال تلجرام: {e}")
 
 # ==========================================
 # 🧠 دوال الذاكرة وإدارة الحالة
@@ -74,7 +91,7 @@ def is_cooling_down(symbol, cooldowns):
     return False
 
 # ==========================================
-# 📈 دوال التحليل الفني (نفس منطقك الممتاز)
+# 📈 دوال التحليل الفني
 # ==========================================
 def fetch_df(exchange, symbol, timeframe, limit):
     data = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
@@ -115,7 +132,7 @@ def analyze(symbol, exchange):
         return None
 
 # ==========================================
-# 🏦 دوال التنفيذ (مع دعم التداول الورقي)
+# 🏦 دوال التنفيذ
 # ==========================================
 def get_balance(exchange):
     if PAPER_TRADING: return 1000.0 # رصيد وهمي للاختبار
@@ -151,6 +168,9 @@ def start_bot():
 
     mode = "الورقي (آمن)" if PAPER_TRADING else "الحقيقي (أموال حقيقية)"
     print(f"🚀 البوت الاحترافي شغال الآن... الوضع: {mode}")
+    
+    # 👉 إرسال رسالة ترحيبية عند التشغيل
+    send_telegram_msg(f"🚀 *تم تشغيل بوت التداول!*\nالوضع الحالي: {mode}")
 
     if state['in_trade']:
         print(f"🔄 جاري استئناف صفقة سابقة لعملة: {state['symbol']}")
@@ -195,6 +215,10 @@ def start_bot():
                 if sell_reason:
                     print(sell_reason)
                     execute_order(exchange, symbol, state['amount'], 'sell', price)
+                    
+                    # 👉 إرسال رسالة تلجرام عند الخروج من الصفقة
+                    msg = f"💸 *تم إغلاق الصفقة!*\nالعملة: {symbol}\nالسبب: {sell_reason}\nالربح/الخسارة: {profit:.2f}%"
+                    send_telegram_msg(msg)
                     
                     # تصفير الذاكرة
                     state = {'in_trade': False, 'symbol': None, 'buy_price': 0, 'amount': 0, 'highest_price': 0, 'stop_loss': 0, 'atr': 0}
@@ -244,6 +268,11 @@ def start_bot():
 
                         save_state(state)
                         print(f"✅ تم الدخول بسعر {buy_price}. وقف الخسارة: {state['stop_loss']:.4f}")
+                        
+                        # 👉 إرسال رسالة تلجرام عند فتح صفقة جديدة
+                        msg = f"🎯 *تم الدخول في صفقة جديدة!*\nالعملة: {symbol}\nالسعر: {buy_price}\nوقف الخسارة: {state['stop_loss']:.4f}"
+                        send_telegram_msg(msg)
+
                         break # إيقاف البحث بمجرد الدخول في صفقة
 
             time.sleep(20)
