@@ -1,386 +1,197 @@
-import ccxt
-import time
-import pandas as pd
-import ta 
-import requests
-import datetime 
+import ccxt, time, pandas as pd, ta, requests, datetime
 
-class PerformanceTracker:
-    def __init__(self, telegram_token, chat_id, exchange_client):
-        self.trades_log = []
-        self.TELEGRAM_TOKEN = telegram_token
-        self.CHAT_ID = chat_id
-        self.exchange = exchange_client 
-        self.send_telegram = lambda msg: self._send_telegram(msg) 
+class Tracker:
+    def __init__(self, t, c, ex):
+        self.log, self.T, self.C, self.ex = [], t, c, ex
+    def send(self, m):
+        try: requests.post(f"https://api.telegram.org/bot{self.T}/sendMessage", data={'chat_id': self.C, 'text': m, 'parse_mode': 'Markdown'})
+        except: pass
+    def add(self, s, ep, xp, q, p, r):
+        self.log.append({'t': datetime.datetime.now(), 's': s, 'ep': ep, 'xp': xp, 'q': float(self.ex.amount_to_precision(s, q)), 'p': p, 'r': r})
+    def report(self):
+        if not self.log: return
+        w = [t for t in self.log if t['p'] > 0]; l = [t for t in self.log if t['p'] <= 0]
+        m = f"📊 *تقرير اليوم*\nالصفقات: {len(self.log)}\nالفوز: {(len(w)/len(self.log))*100:.1f}%\nإجمالي الربح: {sum(t['p'] for t in self.log):.2f}%\nأفضل صفقة: {max(self.log, key=lambda x: x['p'])['s']} ({max(t['p'] for t in self.log):.2f}%)"
+        self.send(m); self.log = [t for t in self.log if t['t'].date() == datetime.date.today()]
 
-    def _send_telegram(self, message):
-        try:
-            url = f"https://api.telegram.org/bot{self.TELEGRAM_TOKEN}/sendMessage"
-            requests.post(url, data={'chat_id': self.CHAT_ID, 'text': message, 'parse_mode': 'Markdown'})
-        except Exception as e:
-            print(f"❌ خطأ في إرسال التلجرام (Tracker): {e}")
-
-    def log_trade(self, symbol, entry_price, exit_price, quantity, is_profit, profit_pct, reason):
-        formatted_quantity = self.exchange.amount_to_precision(symbol, quantity)
-        self.trades_log.append({
-            'timestamp': datetime.datetime.now(),
-            'symbol': symbol,
-            'entry_price': entry_price,
-            'exit_price': exit_price,
-            'quantity': float(formatted_quantity), 
-            'is_profit': is_profit,
-            'profit_pct': profit_pct,
-            'reason': reason
-        })
-        print(f"Trade Logged: {symbol} | Profit: {profit_pct:.2f}% | Reason: {reason}")
-
-    def get_stats(self):
-        if not self.trades_log:
-            return {"total_trades": 0, "win_rate": 0, "total_profit_sum_pct": 0, "avg_profit_pct_wins": 0, "avg_loss_pct_losses": 0, "best_trade_pct": 0, "worst_trade_pct": 0}
-        total_trades = len(self.trades_log)
-        winning_trades = [t for t in self.trades_log if t['is_profit']]
-        losing_trades = [t for t in self.trades_log if not t['is_profit']]
-        win_rate = (len(winning_trades) / total_trades) * 100 if total_trades > 0 else 0
-        all_profit_pct = [t['profit_pct'] for t in self.trades_log]
-        total_profit_sum_pct = sum(all_profit_pct)
-        avg_profit_pct_wins = sum([t['profit_pct'] for t in winning_trades]) / len(winning_trades) if winning_trades else 0
-        avg_loss_pct_losses = sum([t['profit_pct'] for t in losing_trades]) / len(losing_trades) if losing_trades else 0
-        best_trade_pct = max(all_profit_pct) if all_profit_pct else 0
-        worst_trade_pct = min(all_profit_pct) if all_profit_pct else 0
-        return {"total_trades": total_trades, "win_rate": win_rate, "total_profit_sum_pct": total_profit_sum_pct, "avg_profit_pct_wins": avg_profit_pct_wins, "avg_loss_pct_losses": avg_loss_pct_losses, "best_trade_pct": best_trade_pct, "worst_trade_pct": worst_trade_pct}
-
-    def _generate_daily_report(self):
-        stats = self.get_stats()
-        report = f"📊 *تقرير أداء البوت اليومي*\n\n"
-        report += f"📅 التاريخ: {datetime.date.today().strftime('%Y-%m-%d')}\n"
-        report += f"🚀 إجمالي الصفقات: {stats['total_trades']}\n"
-        report += f"🏆 نسبة الفوز (Win Rate): {stats['win_rate']:.2f}%\n"
-        report += f"📈 إجمالي الربح (Sum %): {stats['total_profit_sum_pct']:.2f}%\n"
-        report += f"💰 متوسط ربح الصفقة الرابحة: {stats['avg_profit_pct_wins']:.2f}%\n"
-        report += f"💸 متوسط خسارة الصفقة الخاسرة: {stats['avg_loss_pct_losses']:.2f}%\n"
-        report += f"🌟 أفضل صفقة: {stats['best_trade_pct']:.2f}%\n"
-        report += f"❌ أسوأ صفقة: {stats['worst_trade_pct']:.2f}%\n\n"
-        if self.trades_log:
-            best_strat_trade = max(self.trades_log, key=lambda t: t['profit_pct'])
-            worst_strat_trade = min(self.trades_log, key=lambda t: t['profit_pct'])
-            report += f"✨ **أفضل صفقة:** {best_strat_trade['symbol']} ({best_strat_trade['profit_pct']:.2f}%) - السبب: {best_strat_trade['reason']}\n"
-            report += f"⚠️ **أسوأ صفقة:** {worst_strat_trade['symbol']} ({worst_strat_trade['profit_pct']:.2f}%) - السبب: {worst_strat_trade['reason']}\n"
-        return report
-        
-    def send_daily_report(self):
-        report = self._generate_daily_report()
-        self.send_telegram(report)
-        self.trades_log = [t for t in self.trades_log if t['timestamp'].date() == datetime.date.today()]
-
-class LegendaryBot:
+class Bot:
     def __init__(self):
-        self.API_KEY = 'egAeFM8kVEn7YRKPIHRpJGpDW4GFuHRDHFnRmRqdEWcZxPRAb0qHbvd6T6X3MC94Ffqfgc4BSv9mxbBPXSQ'
-        self.API_SECRET = 'OC7UgGik9WOSjUI6r4AvbqfZIq9O9BrjzC2LRrott95Ewcu2jQHRnjCNQj8sn9ZdKIsAf9ioAkp89xs1e7g'
-        self.TELEGRAM_TOKEN = '8744586010:AAET91PN6ApW3FiX4WU1nSH_F5xoHuzIQKk'
-        self.CHAT_ID = '7520475220'
-        self.RISK_PER_TRADE_PCT = 1.5
-        self.STOP_LOSS_ATR_MULTIPLIER = 2.5
-        self.MAX_CONSECUTIVE_LOSSES = 3
-        self.LOSS_SIZE_REDUCTION_FACTOR = 0.5
-        self.DAILY_LOSS_LIMIT_PCT = 3.0
-        self.ENTRY_CONFIRMATION_TimEframe = '15m'
-        self.DIRECTION_CONFIRMATION_TimEframe = '1h'
-        self.INITIAL_TRADE_AMOUNT_USD = 100
-        self.STOP_LOSS_PCT = -2.5
-        self.TAKE_PROFIT_PCT = 5.0
-        self.TRAILING_ACTIVATE_PCT = 2.5
-        self.TRAILING_DROP_PCT = 0.5
-        self.MAX_RETRIES = 7
-        self.RETRY_DELAY = 7
-        self.MIN_VOLUME_24H = 5000000
-        self.MIN_PRICE_CHANGE_PCT_DAY = 1.5
-        self.exchange = ccxt.bingx({'apiKey': self.API_KEY, 'secret': self.API_SECRET, 'enableRateLimit': True, 'options': {'defaultType': 'spot'}, 'rateLimit': 2000})
-        self.active_trade = None
-        self.consecutive_losses = 0
-        self.daily_loss = 0.0
-        self.last_trade_date = None
-        self.last_report_time = datetime.datetime.now()
-        self.performance_tracker = PerformanceTracker(self.TELEGRAM_TOKEN, self.CHAT_ID, self.exchange)
-        self.send_telegram("✨ *نظام Sniper Pro Pro Legend بدأ العمل بالتحسينات الاحترافية!*")
-        self._load_markets()
+        self.K = 'egAeFM8kVEn7YRKPIHRpJGpDW4GFuHRDHFnRmRqdEWcZxPRAb0qHbvd6T6X3MC94Ffqfgc4BSv9mxbBPXSQ'
+        self.S = 'OC7UgGik9WOSjUI6r4AvbqfZIq9O9BrjzC2LRrott95Ewcu2jQHRnjCNQj8sn9ZdKIsAf9ioAkp89xs1e7g'
+        self.TT = '8744586010:AAET91PN6ApW3FiX4WU1nSH_F5xoHuzIQKk'
+        self.CH = '7520475220'
+        self.ex = ccxt.bingx({'apiKey': self.K, 'secret': self.S, 'enableRateLimit': True, 'options': {'defaultType': 'spot'}, 'rateLimit': 2000})
+        self.trk = Tracker(self.TT, self.CH, self.ex)
+        self.trade = None; self.losses = 0; self.dloss = 0.0; self.date = None; self.rtime = datetime.datetime.now()
+        self.send("✨ *النسخة الوحشية V2.0 بدأت!*"); 
+        print("جاري تحميل الأسواق، يرجى الانتظار...")
+        self.ex.load_markets()
+        print("✅ تم تحميل الأسواق بنجاح!")
 
-    def send_telegram(self, message):
-        self.performance_tracker._send_telegram(message)
-
-    def _load_markets(self):
-        try:
-            self.exchange.load_markets()
-            print("✅ تم تحميل معلومات الأسواق بنجاح.")
-        except Exception as e:
-            error_msg = f"🚨 *خطأ فادح:* فشل تحميل أسواق المنصة: {e}. سيتم إعادة المحاولة..."
-            self.send_telegram(error_msg)
-            print(error_msg)
-            time.sleep(10)
-            self._load_markets()
-
-    def _fetch_with_retry(self, method, *args, **kwargs):
-        for i in range(self.MAX_RETRIES):
+    def send(self, m): self.trk.send(m)
+    def retry(self, fn, *a, **k):
+        for i in range(7):
             try:
-                result = getattr(self.exchange, method)(*args, **kwargs)
-                if result is None and method not in ['fetch_trades', 'fetch_orders']:
-                    if i == self.MAX_RETRIES - 1:
-                        self.send_telegram(f"🚨 *فشل متكرر في استدعاء {method} (No Data Received): {args}")
-                    if i > 0:
-                        print(f"⚠️ {method} ({args}): No data received. Retrying ({i+1}/{self.MAX_RETRIES})...")
-                    time.sleep(self.RETRY_DELAY * (i + 1))
-                    continue
-                return result
-            except (ccxt.NetworkError, ccxt.ExchangeError, ccxt.RequestTimeout, ccxt.BadSymbol) as e:
-                print(f"⚠️ فشل استدعاء {method} ({args}): {e}. المحاولة {i+1}/{self.MAX_RETRIES}...")
-                if i == self.MAX_RETRIES - 1:
-                    self.send_telegram(f"🚨 *فشل متكرر في استدعاء {method}.*")
-                time.sleep(self.RETRY_DELAY * (i + 1))
+                r = getattr(self.ex, fn)(*a, **k)
+                return r if r is not None or fn in ['fetch_trades'] else None
             except Exception as e:
-                print(f"❌ خطأ غير متوقع في {method} ({args}): {e}. المحاولة {i+1}/{self.MAX_RETRIES}...")
-                if i == self.MAX_RETRIES - 1:
-                    self.send_telegram(f"🚨 *خطأ فادح غير متوقع في {method}.*")
-                time.sleep(self.RETRY_DELAY * (i + 1))
+                print(f"⚠️ خطأ في {fn}: {e}"); time.sleep(7 * (i + 1))
         return None
+    def ohlcv(self, s, tf, l): return self.retry('fetch_ohlcv', s, tf, limit=l)
+    def tick(self, s): return self.retry('fetch_ticker', s)
+    def bal(self): return self.retry('fetch_balance')
+    def ticks(self): return self.retry('fetch_tickers')
+    def order(self, t, s, q):
+        o = self.retry(f'create_market_{t}_order', s, q)
+        return o if o and o.get('id') else None
 
-    def _fetch_ohlcv(self, symbol, timeframe, limit):
-        return self._fetch_with_retry('fetch_ohlcv', symbol, timeframe, limit=limit)
+    def get_btc_rsi(self):
+        b = self.ohlcv('BTC/USDT', '15m', 15)
+        if not b: return 50
+        return ta.momentum.rsi(pd.DataFrame(b, columns=['t','o','h','l','c','v'])['c'], window=14).iloc[-1]
 
-    def _fetch_ticker(self, symbol):
-        return self._fetch_with_retry('fetch_ticker', symbol)
+    def regime(self, s):
+        b = self.ohlcv(s, '1h', 100)
+        if not b: return "neutral"
+        df = pd.DataFrame(b, columns=['t','o','h','l','c','v'])
+        df['e1'] = ta.trend.ema_indicator(df['c'], 100); df['e2'] = ta.trend.ema_indicator(df['c'], 200)
+        bb = ta.volatility.BollingerBands(df['c'], 20, 2); df['bw'] = (bb.bollinger_hband() - bb.bollinger_lband()) / df['c'] * 100
+        l = df.iloc[-1]; p = df.iloc[-2]
+        if l['c'] > l['e1'] and l['e1'] > l['e2'] and l['e1'] > p['e1']: return "uptrend"
+        if l['bw'] < 5: return "sideways"
+        return "neutral"
 
-    def _create_order(self, order_type, symbol, qty, price=None, params={}):
-        method = f'create_market_{order_type}_order' if price is None else f'create_limit_{order_type}_order'
-        args = [symbol, qty]
-        if price is not None:
-            args.append(price)
-        order = self._fetch_with_retry(method, *args, params=params)
-        if order and order.get('id'):
-            print(f"✅ تم تنفيذ الأمر {order_type} لـ {symbol}: ID {order.get('id')}")
-            return order
-        else:
-            self.send_telegram(f"⚠️ *فشل تنفيذ الأمر {order_type} لـ {symbol} بعد عدة محاولات.*")
-            return None
-            
-    def _fetch_balance(self):
-        return self._fetch_with_retry('fetch_balance')
-        
-    def _fetch_tickers(self):
-        return self._fetch_with_retry('fetch_tickers')
+    def analyze(self, s, tf, reg):
+        b = self.ohlcv(s, tf, 200)
+        if not b: return False, 0, 0, 0, 0
+        df = pd.DataFrame(b, columns=['t','o','h','l','c','v'])
+        df['e2'] = ta.trend.ema_indicator(df['c'], 200); df['rsi'] = ta.momentum.rsi(df['c'], 14)
+        df['macd'] = ta.trend.macd_diff(df['c']); df['vm'] = df['v'].rolling(20).mean()
+        df['atr'] = ta.volatility.AverageTrueRange(df['h'], df['l'], df['c'], 14).average_true_range()
+        bb = ta.volatility.BollingerBands(df['c'], 20, 2)
+        df['bbl'] = bb.bollinger_lband(); df['bbh'] = bb.bollinger_hband()
+        l = df.iloc[-1]; p = df.iloc[-2]
+        if tf == '15m':
+            if l['atr'] is None: return False, 0, 0, 0, 0
+            vs = l['v'] > (l['vm'] * 1.5)
+            if reg == "uptrend":
+                cond = l['c'] > l['e2'] and (p['c'] < p['bbl']) and (l['c'] > l['bbl']) and 35 < l['rsi'] < 55 and l['macd'] > p['macd'] and vs
+                if cond: return True, l['c'], l['rsi'], l['bbl'], l['bbh']
+            elif reg == "sideways":
+                if l['c'] <= l['bbl'] and vs: return True, l['c'], l['rsi'], l['bbl'], l['bbh']
+        return False, 0, 0, 0, 0
 
-    def _get_market_regime(self, symbol, timeframe='1h'):
-        bars = self._fetch_ohlcv(symbol, timeframe=timeframe, limit=100)
-        if not bars: return "neutral"
-        df = pd.DataFrame(bars, columns=['t','o','h','l','c','v'])
-        df['ema100'] = ta.trend.ema_indicator(df['c'], window=100)
-        df['ema200'] = ta.trend.ema_indicator(df['c'], window=200)
-        bb = ta.volatility.BollingerBands(df['c'], window=20, window_dev=2)
-        df['bb_width'] = (bb.bollinger_hband() - bb.bollinger_lband()) / df['c'] * 100
-        last = df.iloc[-1]
-        prev = df.iloc[-2]
-        is_uptrend = last['c'] > last['ema100'] and last['ema100'] > last['ema200'] and last['ema100'] > prev['ema100']
-        is_sideways = (last['bb_width'] < 5) and (abs(last['c'] - last['ema100']) < (last['c'] * 0.01))
-        is_high_risk = last['bb_width'] > 10
-        if is_uptrend: return "uptrend"
-        elif is_sideways: return "sideways"
-        elif is_high_risk: return "high_risk"
-        else: return "neutral"
-
-    def _analyze_market(self, symbol, timeframe):
-        bars = self._fetch_ohlcv(symbol, timeframe=timeframe, limit=200)
-        if not bars: return False, 0, 0
-        df = pd.DataFrame(bars, columns=['t','o','h','l','c','v'])
-        df['ema200'] = ta.trend.ema_indicator(df['c'], window=200)
-        df['rsi'] = ta.momentum.rsi(df['c'], window=14)
-        df['macd'] = ta.trend.macd_diff(df['c'])
-        bb = ta.volatility.BollingerBands(df['c'], window=20, window_dev=2)
-        df['bb_lower'] = bb.bollinger_lband()
-        df['vol_ma'] = df['v'].rolling(20).mean()
-        df['atr'] = ta.volatility.AverageTrueRange(df['h'], df['l'], df['c'], window=14).average_true_range()
-        last = df.iloc[-1]
-        prev = df.iloc[-2]
-        entry_signal = False
-        if timeframe == self.ENTRY_CONFIRMATION_TimEframe:
-            if last['atr'] is not None and (last['h'] - last['l']) < (last['atr'] * 0.5):
-                 return False, 0, 0
-            volume_spike = last['v'] > (last['vol_ma'] * 1.5)
-            price_action_confirmation = True
-            if last['atr'] is not None and (last['h'] - last['l']) < (last['atr'] * 0.5): 
-                price_action_confirmation = False
-            trend_up_short = last['c'] > last['ema200']
-            oversold_bounce = (prev['c'] < prev['bb_lower']) and (last['c'] > last['bb_lower'])
-            rsi_good = 35 < last['rsi'] < 55
-            macd_cross = last['macd'] > prev['macd']
-            if (trend_up_short and oversold_bounce and rsi_good and macd_cross and volume_spike and price_action_confirmation):
-                entry_signal = True
-        return entry_signal, last['c'], last['rsi']
-
-    def _calculate_atr(self, symbol, timeframe='15m', period=14):
-        bars = self._fetch_ohlcv(symbol, timeframe=timeframe, limit=period + 5)
-        if not bars or len(bars) < period: return None
-        df = pd.DataFrame(bars, columns=['t','o','h','l','c','v'])
-        atr_indicator = ta.volatility.AverageTrueRange(high=df['h'], low=df['l'], close=df['c'], window=period)
-        atr_value = atr_indicator.average_true_range().iloc[-1]
-        if pd.isna(atr_value) or atr_value <= 0: return None
-        return atr_value
-
-    def _get_free_balance(self, currency='USDT'):
-        balance = self._fetch_balance()
-        if balance and currency in balance:
-            return float(balance[currency].get('free', 0))
-        return 0.0
-
-    def _calculate_order_qty(self, symbol, entry_price):
-        total_balance = self._get_free_balance()
-        if total_balance == 0:
-            self.send_telegram("⚠️ *رصيد USDT غير كافٍ.*")
-            return 0
-        atr_value = self._calculate_atr(symbol, timeframe=self.ENTRY_CONFIRMATION_TimEframe)
-        if atr_value is None:
-            self.send_telegram(f"⚠️ *تعذر حساب ATR لـ {symbol}.*")
-            return 0
-        current_risk_per_trade = self.RISK_PER_TRADE_PCT
-        if self.consecutive_losses >= self.MAX_CONSECUTIVE_LOSSES:
-            current_risk_per_trade *= self.LOSS_SIZE_REDUCTION_FACTOR
-            self.send_telegram(f"📉 *تقليل حجم الصفقة لـ {symbol} بسبب خسائر متتالية.*")
-        risk_amount_usd = total_balance * (current_risk_per_trade / 100)
-        stop_loss_distance_usd = self.STOP_LOSS_ATR_MULTIPLIER * atr_value
-        stop_loss_price = entry_price - stop_loss_distance_usd
-        if stop_loss_price <= 0 or stop_loss_distance_usd <= 0: return 0
-        qty_to_buy = risk_amount_usd / stop_loss_distance_usd
+    def calc_qty(self, s, p):
+        b = float(self.bal().get('USDT', {}).get('free', 0))
+        if b == 0: return 0
+        bars = self.ohlcv(s, '15m', 19)
+        if not bars: return 0
+        atr = ta.volatility.AverageTrueRange(high=pd.DataFrame(bars, columns=['t','o','h','l','c','v'])['h'], low=pd.DataFrame(bars, columns=['t','o','h','l','c','v'])['l'], close=pd.DataFrame(bars, columns=['t','o','h','l','c','v'])['c'], window=14).average_true_range().iloc[-1]
+        if pd.isna(atr) or atr <= 0: return 0
+        risk = b * (0.75 if self.losses >= 3 else 1.5) / 100
+        sl_dist = 2.5 * atr
+        if p - sl_dist <= 0: return 0
+        qty = risk / sl_dist
         try:
-            market_info = self.exchange.market(symbol)
-            formatted_qty = self.exchange.amount_to_precision(symbol, qty_to_buy)
-            min_qty = market_info.get('limits', {}).get('amount', {}).get('min')
-            if min_qty and float(formatted_qty) < min_qty:
-                formatted_qty = self.exchange.amount_to_precision(symbol, min_qty)
-        except Exception as e:
-            formatted_qty = self.exchange.amount_to_precision(symbol, qty_to_buy)
-        if float(formatted_qty) <= 0: return 0
-        return float(formatted_qty)
+            m = self.ex.market(s); fq = self.ex.amount_to_precision(s, qty)
+            mn = m.get('limits', {}).get('amount', {}).get('min')
+            if mn and float(fq) < mn: fq = self.ex.amount_to_precision(s, mn)
+        except: fq = self.ex.amount_to_precision(s, qty)
+        return float(fq) if float(fq) > 0 else 0
 
-    def _close_trade(self, reason, profit_pct, is_loss=False):
-        if not self.active_trade: return False
-        symbol = self.active_trade['symbol']
-        coin = symbol.split('/')[0]
-        balance = self._fetch_balance()
-        if not balance or coin not in balance or balance[coin].get('free', 0) <= 0:
-            self.send_telegram(f"⚠️ *لا يمكن العثور على رصيد حر لـ {coin}.*")
-            self.active_trade = None 
-            return False
-        qty_to_sell = balance[coin]['free']
-        formatted_qty = float(self.exchange.amount_to_precision(symbol, qty_to_sell))
-        if formatted_qty <= 0:
-            self.active_trade = None
-            return False
-        ticker = self._fetch_ticker(symbol)
-        exit_price = self.active_trade['entry'] if not ticker else ticker['last']
-        sell_order = self._create_order('sell', symbol, formatted_qty)
-        if not sell_order:
-            self.send_telegram(f"🚨 *فشل تنفيذ أمر البيع لـ {symbol}.*")
-            return False
-        self.performance_tracker.log_trade(symbol=symbol, entry_price=self.active_trade['entry'], exit_price=exit_price, quantity=formatted_qty, is_profit=(profit_pct > 0), profit_pct=profit_pct, reason=reason)
-        if is_loss:
-            self.consecutive_losses += 1
-            total_balance = self._get_free_balance()
-            if total_balance > 0: self.daily_loss += (abs(profit_pct) / 100) * (self._get_free_balance() / total_balance * 100)
-            else: self.daily_loss += abs(profit_pct)
-            self.send_telegram(f"📉 الخسائر المتتالية: {self.consecutive_losses}/{self.MAX_CONSECUTIVE_LOSSES}.")
+    def close(self, reason, pct, loss=False):
+        if not self.trade: return
+        s = self.trade['s']; c = s.split('/')[0]; b = self.bal()
+        if not b or c not in b or b[c].get('free', 0) <= 0: self.trade = None; return
+        q = float(self.ex.amount_to_precision(s, b[c]['free']))
+        if q <= 0: self.trade = None; return
+        t = self.tick(s); xp = self.trade['e'] if not t else t['last']
+        if not self.order('sell', s, q): self.send(f"🚨 فشل إغلاق {s}"); return
+        self.trk.add(s, self.trade['e'], xp, q, pct, reason)
+        if loss:
+            self.losses += 1; tb = float(self.bal().get('USDT', {}).get('free', 0))
+            self.dloss += (abs(pct)/100)*tb if tb > 0 else abs(pct)
+            self.send(f"📉 خسارة {s}: {pct:.2f}%")
         else:
-            self.consecutive_losses = 0
-        msg = f"✅ *تم إغلاق الصفقة*\n🪙 {symbol}\n🎯 {reason}\n💰 {profit_pct:.2f}%"
-        self.send_telegram(msg)
-        self.active_trade = None
-        return True
+            self.losses = 0; self.send(f"🏆 ربح {s}: {pct:.2f}% | {reason}")
+        self.trade = None
 
     def run(self):
-        self.send_telegram("🚀 *نظام Sniper Pro Pro Legend بدأ العمل!*")
+        self.send("🚀 *الوحش V2 جاهز للقنص!*")
+        print("\n==================================================")
+        print("🚀 تم بدء حلقة التداول بنجاح. البوت يفكر الآن...")
+        print("==================================================\n")
         while True:
-            current_date_today = datetime.date.today()
-            if self.last_trade_date != current_date_today:
-                self.daily_loss = 0.0
-                self.last_trade_date = current_date_today
-                self.send_telegram(f"🗓️ *بدأ يوم تداول جديد.*")
+            if self.date != datetime.date.today(): self.dloss = 0.0; self.date = datetime.date.today()
             try:
-                if self.daily_loss >= self.DAILY_LOSS_LIMIT_PCT:
-                    self.send_telegram(f"🛑 **تم الوصول إلى حد الخسارة اليومي.**")
-                    time.sleep(3600)
-                    continue
-                if not self.active_trade:
-                    tickers_data = self._fetch_tickers()
-                    if not tickers_data:
-                        time.sleep(30)
-                        continue
-                    filtered_symbols = []
-                    for symbol, ticker_info in tickers_data.items():
-                        if (symbol.endswith('/USDT') and ':' not in symbol and ticker_info and ticker_info.get('quoteVolume') and ticker_info.get('last')):
-                            volume_24h = ticker_info.get('quoteVolume', 0) * ticker_info.get('last', 0)
-                            price_change_pct_day = ticker_info.get('change', 0)
-                            if (volume_24h > self.MIN_VOLUME_24H and abs(price_change_pct_day) > self.MIN_PRICE_CHANGE_PCT_DAY):
-                                filtered_symbols.append(symbol)
-                    symbols_to_analyze = filtered_symbols[:30]
-                    if not symbols_to_analyze:
-                        time.sleep(60)
-                        continue
-                    for symbol in symbols_to_analyze:
-                        market_regime = self._get_market_regime(symbol, timeframe=self.DIRECTION_CONFIRMATION_TimEframe)
-                        if market_regime != "uptrend": continue
-                        is_uptrend_long, _, _ = self._analyze_market(symbol, timeframe=self.DIRECTION_CONFIRMATION_TimEframe)
-                        if not is_uptrend_long: continue
-                        is_good_entry, price, rsi_value = self._analyze_market(symbol, timeframe=self.ENTRY_CONFIRMATION_TimEframe)
-                        if is_good_entry:
-                            quantity_to_buy = self._calculate_order_qty(symbol, price)
-                            if quantity_to_buy <= 0: continue
-                            buy_order = self._create_order('buy', symbol, quantity_to_buy)
-                            if buy_order:
-                                atr_initial = self._calculate_atr(symbol, self.ENTRY_CONFIRMATION_TimEframe)
-                                initial_sl_price = price * (1 - self.STOP_LOSS_ATR_MULTIPLIER * atr_initial / price) if atr_initial else price * (1 - self.STOP_LOSS_PCT/100)
-                                self.active_trade = {'symbol': symbol, 'entry': price, 'stop_loss_price': initial_sl_price, 'initial_stop_loss_price': initial_sl_price, 'highest_profit_price': price}
-                                self.send_telegram(f"🎯 *تم قنص فرصة!*\n🪙 {symbol}\n💵 {price:.4f}\n⚖️ {quantity_to_buy:.6f}")
-                                self.consecutive_losses = 0
-                                break
+                if self.dloss >= 3.0: self.send("🛑 حد الخسارة اليومي"); time.sleep(3600); continue
+                if not self.trade:
+                    print("🔍 [1/3] جاري فحص نبض البيتكوين...")
+                    btc_rsi = self.get_btc_rsi()
+                    print(f"📊 نبض البيتكوين (RSI): {btc_rsi:.1f}")
+                    if btc_rsi < 40: 
+                        print("🛑 البيتكوين ينهار! تجاهل كل الفرص والانتظار 60 ثانية...\n")
+                        time.sleep(60); continue
+                    
+                    print("🌐 [2/3] جاري جلب عملات السوق (قد يستغرق 30 ثانية على الهاتف)...")
+                    tk = self.ticks()
+                    if not tk: 
+                        print("❌ فشل جلب العملات، إعادة المحاولة بعد 30 ثانية...\n")
+                        time.sleep(30); continue
+                    
+                    syms = [s for s, i in tk.items() if s.endswith('/USDT') and ':' not in s and i.get('quoteVolume') and i.get('last') and (i['quoteVolume']*i['last'] > 5000000) and abs(i.get('change', 0)) > 1.5][:30]
+                    print(f"✅ [3/3] تم العثور على {len(syms)} عملة قوية. جاري التحليل الفني لكل عملة...")
+                    
+                    if not syms:
+                        print("💤 السوق هادئ جداً أو لا توجد عملات مطابقة. الانتظار 60 ثانية...\n")
+                        time.sleep(60); continue
+                    
+                    for s in syms:
+                        print(f"-> تحليل {s}...", end='\r')
+                        rg = self.regime(s)
+                        if rg not in ["uptrend", "sideways"]: continue
+                        ok, p, rsi, bbl, bbh = self.analyze(s, '15m', rg)
+                        if ok:
+                            q = self.calc_qty(s, p)
+                            if q <= 0: continue
+                            if self.order('buy', s, q):
+                                atr = ta.volatility.AverageTrueRange(high=pd.DataFrame(self.ohlcv(s, '15m', 19), columns=['t','o','h','l','c','v'])['h'], low=pd.DataFrame(self.ohlcv(s, '15m', 19), columns=['t','o','h','l','c','v'])['l'], close=pd.DataFrame(self.ohlcv(s, '15m', 19), columns=['t','o','h','l','c','v'])['c'], window=14).average_true_range().iloc[-1]
+                                sl = p * (1 - 2.5 * atr / p) if not pd.isna(atr) else p * 0.975
+                                self.trade = {'s': s, 'e': p, 'sl': sl, 'isl': sl, 'hp': p, 'time': time.time(), 'rg': rg, 'bbh': bbh}
+                                mode = "ترند صاعد 🚀" if rg=="uptrend" else "تذبذب سكالبينج 🔄"
+                                self.send(f"🎯 *قنص ({mode})*\n🪙 {s}\n💵 {p:.4f}\n⚖️ {q:.6f}\n🛑 SL: {sl:.4f}")
+                                print(f"\n🎯 🎯 🎯 تم فتح صفقة على {s}! الدخول في وضع المراقبة...\n")
+                                self.losses = 0; break
+                    print("انتهت دورة البحث، بدء دورة جديدة...\n")
                 else:
-                    symbol = self.active_trade['symbol']
-                    ticker = self._fetch_ticker(symbol)
-                    if not ticker:
-                        time.sleep(15)
-                        continue
-                    current_price = ticker['last']
-                    entry_price = self.active_trade['entry']
-                    current_profit_pct = ((current_price - entry_price) / entry_price) * 100
-                    if current_price > self.active_trade['highest_profit_price']:
-                        self.active_trade['highest_profit_price'] = current_price
-                    highest_profit_pct = ((self.active_trade['highest_profit_price'] - entry_price) / entry_price) * 100
-                    print(f"⏱️ مراقبة {symbol} | الربح: {current_profit_pct:.2f}% | SL: {self.active_trade['stop_loss_price']:.4f}", end='\r')
-                    safe_stop_loss = max(self.active_trade['stop_loss_price'], self.active_trade['initial_stop_loss_price'])
-                    if current_price <= safe_stop_loss:
-                        self._close_trade("🛑 ضرب وقف الخسارة", current_profit_pct, is_loss=True)
-                        continue
-                    if current_profit_pct >= self.TAKE_PROFIT_PCT:
-                        self._close_trade("🏆 تحقيق الهدف", current_profit_pct, is_loss=False)
-                        continue
-                    if highest_profit_pct >= self.TRAILING_ACTIVATE_PCT:
-                        atr_value = self._calculate_atr(symbol, self.ENTRY_CONFIRMATION_TimEframe)
-                        if atr_value:
-                            new_trailing_stop_price_candidate = self.active_trade['highest_profit_price'] * (1 - (self.TRAILING_DROP_PCT / 100))
-                            new_trailing_stop_price = max(new_trailing_stop_price_candidate, self.active_trade['initial_stop_loss_price'])
-                            if new_trailing_stop_price > self.active_trade['stop_loss_price']:
-                                self.active_trade['stop_loss_price'] = new_trailing_stop_price
-                                self.send_telegram(f"⬆️ **تم تحديث Trailing SL لـ {symbol} إلى:** {self.active_trade['stop_loss_price']:.4f}")
-            except ccxt.RateLimitExceeded as e:
-                time.sleep(e.retryAfter / 1000 if e.retryAfter else 60)
-            except ccxt.NetworkError as e:
-                time.sleep(30)
-            except ccxt.ExchangeError as e:
-                time.sleep(15)
-            except Exception as e:
-                print(f"\n⚠️ خطأ غير متوقع: {e}")
+                    s = self.trade['s']; t = self.tick(s)
+                    if not t: time.sleep(15); continue
+                    cp = t['last']; ep = self.trade['e']; pp = ((cp - ep) / ep) * 100
+                    if cp > self.trade['hp']: self.trade['hp'] = cp
+                    hpp = ((self.trade['hp'] - ep) / ep) * 100
+                    print(f"⏱️ مراقبة {s} | الربح الحالي: {pp:.2f}% | أعلى ربح: {hpp:.2f}% | SL: {self.trade['sl']:.4f}     ", end='\r')
+                    
+                    ssl = max(self.trade['sl'], self.trade['isl'])
+                    if cp <= ssl: self.close("🛑 ضرب وقف الخسارة", pp, True); continue
+                    if time.time() - self.trade['time'] > 3600 and pp < 1.0: self.close("⏳ انتهاء الوقت (نوم)", pp, True); continue
+                    if self.trade['rg'] == "uptrend" and pp >= 5.0: self.close("🏆 هدف الترند", pp, False); continue
+                    if self.trade['rg'] == "sideways" and cp >= self.trade['bbh']: self.close("🔄 سكالبينج (ضرب السقف)", pp, False); continue
+                    
+                    if pp > 1.5:
+                        bars = self.ohlcv(s, '15m', 15)
+                        if bars:
+                            rsi_now = ta.momentum.rsi(pd.DataFrame(bars, columns=['t','o','h','l','c','v'])['c'], 14).iloc[-1]
+                            if rsi_now > 75 and bars[-1]['c'] < bars[-2]['c']: self.close("🧠 خروج ذكي (RSI قمة)", pp, False); continue
+                            
+                    if hpp >= 2.5:
+                        atr = ta.volatility.AverageTrueRange(high=pd.DataFrame(bars, columns=['t','o','h','l','c','v'])['h'], low=pd.DataFrame(bars, columns=['t','o','h','l','c','v'])['l'], close=pd.DataFrame(bars, columns=['t','o','h','l','c','v'])['c'], window=14).average_true_range().iloc[-1] if bars else None
+                        if atr:
+                            nsl = self.trade['hp'] * (1 - 0.5 / 100)
+                            if nsl > self.trade['sl']: self.trade['sl'] = nsl
+            except Exception as e: 
+                print(f"\n⚠️ خطأ عام: {e}\n")
                 time.sleep(15)
             time.sleep(15)
-            now = datetime.datetime.now()
-            if (now - self.last_report_time).total_seconds() >= 24 * 60 * 60:
-                self.performance_tracker.send_daily_report()
-                self.last_report_time = now
+            if (datetime.datetime.now() - self.rtime).total_seconds() >= 86400: self.trk.report(); self.rtime = datetime.datetime.now()
 
-if __name__ == "__main__":
-    bot = LegendaryBot()
-    bot.run()
+if __name__ == "__main__": Bot().run()
