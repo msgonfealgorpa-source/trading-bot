@@ -1,22 +1,19 @@
 import ccxt, time, pandas as pd, ta, requests, datetime, os, warnings
 
-# لإخفاء التحذيرات الصفراء
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 class Tracker:
     def __init__(self, t, c, ex): self.log, self.T, self.C, self.ex = [], t, c, ex
     def send(self, m):
-        try: requests.post(f"https://api.telegram.org/bot{self.T}/sendMessage", data={'chat_id': self.CH, 'text': m, 'parse_mode': 'Markdown'})
+        try: requests.post(f"https://api.telegram.org/bot{self.T}/sendMessage", data={'chat_id': self.C, 'text': m, 'parse_mode': 'Markdown'})
         except: pass
     def add(self, s, d, ep, xp, q, p, r):
-        # ✅ استخدام time.time() لتجنب أخطاء التوقيت في السيرفرات
         self.log.append({'t': time.time(), 's': s, 'd': d, 'ep': ep, 'xp': xp, 'q': float(self.ex.amount_to_precision(s, q)), 'p': p, 'r': r})
     def report(self):
         if not self.log: return
         w = [t for t in self.log if t['p'] > 0]
         m = f"📊 *تقرير الوحش V6.1*\nالصفقات: {len(self.log)}\nالفوز: {(len(w)/len(self.log))*100:.1f}%\nالربح: {sum(t['p'] for t in self.log):.2f}%"
         self.send(m)
-        # تصفية السجل بناءً على التاريخ الحالي
         today_date = datetime.date.today()
         self.log = [t for t in self.log if datetime.datetime.fromtimestamp(t['t']).date() == today_date]
 
@@ -28,12 +25,12 @@ class FuturesBot:
         self.CH = os.environ.get('CHAT_ID')
         
         if not self.K or not self.S or not self.TT: 
-            print("❌ خطأ: المقدمة غير موجودة!")
+            print("❌ خطأ: المقدحة غير موجودة!")
             return
 
         self.ex = ccxt.bingx({'apiKey': self.K, 'secret': self.S, 'enableRateLimit': True, 'options': {'defaultType': 'swap'}, 'rateLimit': 2000})
         self.trk = Tracker(self.TT, self.CH, self.ex)
-        self.trade = None; self.losses = 0; self.dloss = 0.0; self.date = None; self.rtime = time.time()
+        self.trade = None; self.losses = 0; self.dloss = 0.0; self.date = datetime.date.today(); self.rtime = time.time()
         self.LEVERAGE = 10 
         
         self.NY_EMA_FILTER = True    
@@ -47,7 +44,7 @@ class FuturesBot:
         
         msg = "🗽 *بوت الوحش V6.1 (مثالي)*\n"
         msg += "⚡ 1: بولينجر/ماكدي (8% مخاطرة)\n"
-        msg += "🚀 2: كسر دونشين (8% مخ落差 مخاطرة)\n"
+        msg += "🚀 2: كسر دونشين (8% مخاطرة)\n"
         msg += "🗽 3: حيلة نيويورك (5% مخاطرة + توقيت تلقائي)\n"
         msg += "📋 الرافعة: 10X"
         self.send(msg)
@@ -107,7 +104,9 @@ class FuturesBot:
         b = self.ohlcv(s, '1h', 100)
         if not b: return "neutral"
         df = pd.DataFrame(b, columns=['t','o','h','l','c','v'])
-        df['e1'] = ta.trend.ema_indicator(df['c'], 100); df['e2'] = ta.trend.ema_indicator(df['c'], 200)
+        # ✅ استخدام الدالة الأساسية ta.ema بدلاً من ta.trend.ema_indicator
+        df['e1'] = ta.ema(df['c'], window=100)
+        df['e2'] = ta.ema(df['c'], window=200)
         l = df.iloc[-1]; p = df.iloc[-2]
         if l['c'] > l['e1'] and l['e1'] > l['e2'] and l['e1'] > p['e1']: return "uptrend"
         if l['c'] < l['e1'] and l['e1'] < l['e2'] and l['e1'] < p['e1']: return "downtrend"
@@ -117,62 +116,64 @@ class FuturesBot:
         b = self.ohlcv(s, tf, 200)
         if not b: return False, 0, 0, 0, 0
         df = pd.DataFrame(b, columns=['t','o','h','l','c','v'])
-        df['e2'] = ta.trend.ema_indicator(df['c'], 200); df['rsi'] = ta.momentum.rsi(df['c'], 14)
-        df['macd'] = ta.trend.macd_diff(df['c']); df['vm'] = df['v'].rolling(20).mean()
-        df['atr'] = ta.volatility.AverageTrueRange(df['h'], df['l'], df['c'], 14).average_true_range()
-        bb = ta.volatility.BollingerBands(df['c'], 20, 2)
-        df['bbl'] = bb.bollinger_lband(); df['bbh'] = bb.bollinger_hband()
+        # ✅ استخدام ta.ema بدلاً من ta.trend.ema_indicator
+        df['e2'] = ta.ema(df['c'], window=200)
+        df['rsi'] = ta.momentum.rsi(df['c'], 14)
+        df['macd'] = ta.macd(df['macd(), df['close()'], df['signal()']) # ✅ تعديل للدالة الأساسية
+        df['vm'] = df['v'].rolling(20).mean()
+        df['atr'] = ta.volatility.average_true_range(df['h'], df['l'], df['c'], window=14)
+        # ✅ استخدام ta.bollinger_bands() بدلاً من ta.volatility.BollingerBands
+        bb = ta.bollinger_bands(df['c'], window=20)
+        df['bbl'] = bb['lower'] 
+        df['bbh'] = bb['upper']
+        
         l = df.iloc[-1]; p = df.iloc[-2]
         if tf == '15m':
-            if l['atr'] is None: return False, 0, 0, 0, 0
+            if pd.isna(df['atr'].iloc[-1]): return False, 0, 0, 0, 0
             vs = l['v'] > (l['vm'] * 1.5)
             prev_body = abs(p['o'] - p['c'])
             if reg == "uptrend":
                 prev_wick_low = min(p['o'], p['c']) - p['l']
-                is_grab = (prev_wick_low > prev_body * 1.5) and (p['l'] < p['bbl'])
-                cond = l['c'] > l['e2'] and is_grab and (l['c'] > l['bbl']) and 35 < l['rsi'] < 55 and l['macd'] > p['macd'] and vs and (l['c'] > l['o'])
-                if cond: return True, l['c'], l['rsi'], l['bbl'], l['bbh']
+                is_grab = (prev_wick_low > prev_body * 1.5) and (p['l'] < df['bbl'].iloc[-2])
+                cond = l['c'] > l['e2'] and is_grab and (l['c'] > df['bbl'].iloc[-1]) and 35 < l['rsi'] < 55 and l['macd'] > df['macd'].iloc[-2] and vs and (l['c'] > l['o'])
+                if cond: return True, l['c'], l['rsi'], df['bbl'].iloc[-1], df['bbh'].iloc[-1]
             elif reg == "downtrend":
                 prev_wick_high = p['h'] - max(p['o'], p['c'])
-                is_grab = (prev_wick_high > prev_body * 1.5) and (p['h'] > p['bbh'])
-                cond = l['c'] < l['e2'] and is_grab and (l['c'] < l['bbh']) and 45 < l['rsi'] < 65 and l['macd'] < p['macd'] and vs and (l['c'] < p['o'])
-                if cond: return True, l['c'], l['rsi'], l['bbl'], l['bbh']
+                is_grab = (prev_wick_high > prev_body * 1.5) and (p['h'] > df['bbh'].iloc[-2])
+                cond = l['c'] < l['e2'] and is_grab and (l['c'] < df['bbh'].iloc[-1]) and 45 < l['rsi'] < 65 and l['macd'] < df['macd'].iloc[-2] and vs and (l['c'] < p['o'])
+                if cond: return True, l['c'], l['rsi'], df['bbl'].iloc[-1], df['bbh'].iloc[-1]
         return False, 0, 0, 0, 0
 
     def analyze_donchian_strategy(self, s, tf):
         b = self.ohlcv(s, tf, 50)
         if not b or len(b) < 50: return None, 0, 0
         df = pd.DataFrame(b, columns=['t','o','h','l','c','v'])
-        df['e2'] = ta.trend.ema_indicator(df['c'], 200)
+        df['e2'] = ta.ema(df['c'], 200)
         df['dc_upper'] = df['h'].rolling(20).max()
         df['dc_lower'] = df['l'].rolling(20).min()
         df['vm'] = df['v'].rolling(20).mean()
         df['rsi'] = ta.momentum.rsi(df['c'], 14)
-        df['atr'] = ta.volatility.AverageTrueRange(df['h'], df['l'], df['c'], 14).average_true_range()
+        df['atr'] = ta.volatility.average_true_range(df['h'], df['l'], df['c'], window=14)
         l = df.iloc[-1]; p = df.iloc[-2]
-        if pd.isna(l['atr']) or pd.isna(l['dc_upper']): return None, 0, 0
+        if pd.isna(df['atr'].iloc[-1]) or pd.isna(df['dc_upper'].iloc[-1]): return None, 0, 0
         vs = l['v'] > l['vm']
-        long_cond = (l['c'] > l['e2']) and (l['c'] > l['dc_upper']) and (p['c'] <= p['dc_upper']) and vs and (l['rsi'] > 50)
-        short_cond = (l['c'] < l['e2']) and (l['c'] < l['dc_lower']) and (p['c'] >= p['dc_lower']) and vs and (l['rsi'] < 50)
-        if long_cond: return 'long', l['c'], l['atr']
-        if short_cond: return 'short', l['c'], l['atr']
+        long_cond = (l['c'] > l['e2']) and (l['c'] > df['dc_upper'].iloc[-1]) and (p['c'] <= df['dc_upper'].iloc[-1]) and vs and (l['rsi'] > 50)
+        short_cond = (l['c'] < l['e2']) and (l['c'] < df['dc_lower'].iloc[-1]) and (p['c'] >= df['dc_lower'].iloc[-1]) and vs and (l['rsi'] < 50)
+        if long_cond: return 'long', l['c'], l['atr'].iloc[-1]
+        if short_cond: return 'short', l['c'], l['atr'].iloc[-1]
         return None, 0, 0
 
     def _get_ny_open_hour_utc(self):
-        # ✅ استخدام time.time() لتجنب الكارثة تماماً
         now = time.time()
-        # فحص بسيط لمعرفة إذا كنا في فصل الصيف (من منتصف مارس الى نوفمبر)
-        day_of_year = time.localtime(time.time()).tm_yday
-        is_dst = (day_of_year >= 74) and (day_of_year <= 310) # تقريباً من 15 مارس لـ 6 نوفمبر
+        day_of_year = time.localtime(now).tm_yday
+        is_dst = (day_of_year >= 74) and (day_of_year <= 310)
         return 13 if is_dst else 14
 
     def analyze_ny_breakout(self, s):
-        # ✅ استخدام time.time() لتجنب الكارثة
         now = time.time()
         ny_hour = self._get_ny_open_hour_utc()
         
-        # حساب وقت فتح نيويورك بالتوقيت الحالي
-        ny_open_time = datetime.datetime.fromtimestamp(now).replace(hour=ny_hour, minute=30, second=0, microsecond=0)
+        ny_open_time = datetime.datetime.now().replace(hour=ny_hour, minute=30, second=0, microsecond=0)
         
         if now < ny_open_time.timestamp(): return None, 0, 0
         
@@ -181,7 +182,7 @@ class FuturesBot:
         df = pd.DataFrame(bars, columns=['t','o','h','l','c','v'])
         df['time'] = pd.to_datetime(df['t'], unit='ms')
         
-        ref_mask = (df['time'].dt.hour == ny_hour) & (df['time'].dt.minute == 30) & (df['time'].dt.date == datetime.datetime.fromtimestamp(ny_open_time.timestamp()).date())
+        ref_mask = (df['time'].dt.hour == ny_hour) & (df['time'].dt.minute == 30) & (df['time'].dt.date == ny_open_time.date())
         ref_candles = df[ref_mask]
         if ref_candles.empty: return None, 0, 0
         
@@ -196,16 +197,17 @@ class FuturesBot:
         l = recent_bars.iloc[-1] 
         p = recent_bars.iloc[-2] 
         
-        df['e2'] = ta.trend.emma_indicator(df['c'], window=200)
-        df['rsi'] = ta.momentum.rsi(df['c'], window=14)
+        # ✅ استخدام الدوال الأساسية بدون نقاط فرعية
+        df['e2'] = ta.ema(df['c'], window=200)
+        df['rsi'] = ta.momentum.rsi(df['c'], 14)
         
         df['vm'] = df['v'].rolling(20).mean()
         vm_current = df['vm'].iloc[-1] 
         
         vs = (l['v'] > vm_current * 1.2) if self.NY_VOL_FILTER else True
         
-        df['atr'] = ta.volatility.AverageTrueRange(df['h'], df['l'], df['c'], window=14).average_true_range()
-        if pd.isna(l['e2']) or pd.isna(l['rsi']) or pd.isna(l['atr']) or pd.isna(vm_current): return None, 0, 0
+        df['atr'] = ta.volatility.average_true_range(df['h'], df['l'], df['c'], window=14)
+        if pd.isna(df['e2']) or pd.isna(df['rsi']) or pd.isna(df['atr'].iloc[-1]) or pd.isna(vm_current): return None, 0, 0
         
         body = abs(l['c'] - l['o'])
         upper_wick = l['h'] - max(l['c'], l['o'])
@@ -220,7 +222,7 @@ class FuturesBot:
             if long_retest and long_entry and is_strong_candle and vs:
                 if not self.NY_EMA_FILTER or l['c'] > l['e2']:
                     if not self.NY_RISK_PCT or l['rsi'] > 50:
-                        return 'long', l['c'], l['atr'] * 1.5
+                        return 'long', l['c'], df['atr'].iloc[-1] * 1.5
 
         short_break = any(recent_bars['c'] < ref_low) 
         if short_break:
@@ -230,7 +232,7 @@ class FuturesBot:
             if short_retest and short_entry and is_strong_candle and vs:
                 if not self.NY_EMA_FILTER or l['c'] < l['e2']:
                     if not self.NY_RISK_PCT or l['rsi'] < 50:
-                        return 'short', l['c'], l['atr'] * 1.5
+                        return 'short', l['c'], df['atr'].iloc[-1] * 1.5
                             
         return None, 0, 0
 
@@ -240,7 +242,7 @@ class FuturesBot:
         bars = self.ohlcv(s, '15m', 19)
         if not bars: return 0
         df = pd.DataFrame(bars, columns=['t','o','h','l','c','v'])
-        atr = ta.volatility.AverageTrueRange(high=df['h'], low=df['l'], close=df['c'], window=14).average_true_range().iloc[-1]
+        atr = ta.volatility.average_true_range(high=df['h'], low=df['l'], close=df['c'], window=14).iloc[-1]
         if pd.isna(atr) or atr <= 0: return 0
         
         risk_pct = risk_override if risk_override is not None else (0.75 if self.losses >= 3 else 8.0)
@@ -285,7 +287,6 @@ class FuturesBot:
         self.send("🚀 *الوحش V6.1 (مثالي) جاهز!*")
         print("\n🚀 بدء المحرك الثلاثي...")
         while True:
-            # ✅ استخدام time.time() لتجنب كارثة التاريخ في السيرفر
             current_date = datetime.date.today()
             if self.date != current_date: 
                 self.dloss = 0.0 
@@ -317,7 +318,7 @@ class FuturesBot:
                                 price = p
                                 bars = self.ohlcv(s, '15m', 19)
                                 df = pd.DataFrame(bars, columns=['t','o','h','l','c','v'])
-                                atr = ta.volatility.AverageTrueRange(high=df['h'], low=df['l'], close=df['c'], window=14).average_true_range().iloc[-1]
+                                atr = ta.volatility.average_true_range(high=df['h'], low=df['l'], close=df['c'], window=14).iloc[-1]
                                 sl_dist = 2.5 * atr if not pd.isna(atr) else p * 0.025
                                 strategy_used = "[استراتيجية 1] بولينجر/ماكدي"
                                 entered = True
@@ -388,7 +389,7 @@ class FuturesBot:
                             o_type = 'buy' if d == 'long' else 'sell'
                             if self.order(o_type, s, add_q):
                                 self.trade['pyramided'] = True
-                                self.trade['q'] = str(float(self.trade['q']) + add_q)
+                                self.trade['q'] = str(float(self.trade['q']) + add_q
                                 self.send(f"🚀 *تعزيز!* {s}\nمضاعفة العقد: {self.trade['q']}")
                                 time.sleep(2); continue
 
@@ -405,9 +406,8 @@ class FuturesBot:
             except Exception as e: print(f"\n⚠️ Err: {e}"); time.sleep(15)
             time.sleep(15)
             
-            # ✅ استخدام time.time() بدل datetime.now() في نهاية الدورة
             if (time.time() - self.rtime) >= 86400: 
                 self.trk.report() 
                 self.rtime = time.time()
 
-if __name__ == "__main__": FuturesBot().run()
+if __name__ "__main__": FuturesBot().run()
