@@ -10,19 +10,18 @@ class Tracker:
     def report(self):
         if not self.log: return
         w = [t for t in self.log if t['p'] > 0]
-        m = f"📊 *تقرير العقود*\nالصفقات: {len(self.log)}\nالفوز: {(len(w)/len(self.log))*100:.1f}%\nالربح: {sum(t['p'] for t in self.log):.2f}%"
+        m = f"📊 *تقرير العقود (مزدوج)*\nالصفقات: {len(self.log)}\nالفوز: {(len(w)/len(self.log))*100:.1f}%\nالربح: {sum(t['p'] for t in self.log):.2f}%"
         self.send(m); self.log = [t for t in self.log if t['t'].date() == datetime.date.today()]
 
 class FuturesBot:
     def __init__(self):
-        # 🔒 قراءة المفاتيح من السيرفر بشكل آمن
         self.K = os.environ.get('API_KEY')
         self.S = os.environ.get('API_SECRET')
         self.TT = os.environ.get('TELEGRAM_TOKEN')
         self.CH = os.environ.get('CHAT_ID')
         
         if not self.K or not self.S or not self.TT: 
-            print("❌ خطأ: المفاتيح غير موجودة! (تأكد من اعدادات Railway)")
+            print("❌ خطأ: المفاتيح غير موجودة!")
             return
 
         self.ex = ccxt.bingx({'apiKey': self.K, 'secret': self.S, 'enableRateLimit': True, 'options': {'defaultType': 'swap'}, 'rateLimit': 2000})
@@ -31,9 +30,11 @@ class FuturesBot:
         self.LEVERAGE = 10 
         
         self.send("🔄 جاري التحقق من الصفقات المفتوحة...")
-        self.trade = self.load_state_from_exchange() # 🧠 ذاكرة السيرفر
+        self.trade = self.load_state_from_exchange()
         
-        msg = "✨ *بوت الوحش V4 (Long/Short + ميزات مجنونة)*\n"
+        msg = "✨ *بوت الوحش V5 (مزدوج التراكمي)*\n"
+        msg += "⚡ استراتيجية 1: بولينجر/ماكدي\n"
+        msg += "🚀 استراتيجية 2: كسر دونشين\n"
         msg += "📋 المخاطرة: 8% | الرافعة: 10X"
         self.send(msg)
         print("جاري تحميل أسواق العقود...")
@@ -62,7 +63,6 @@ class FuturesBot:
         o = self.retry(f'create_market_{t}_order', s, q)
         return o if o and o.get('id') else None
 
-    # 🧠 ذاكرة الاستضافة السحابية
     def load_state_from_exchange(self):
         try:
             positions = self.retry('fetch_positions')
@@ -92,7 +92,10 @@ class FuturesBot:
         if l['c'] < l['e1'] and l['e1'] < l['e2'] and l['e1'] < p['e1']: return "downtrend"
         return "neutral"
 
-    def analyze(self, s, tf, reg):
+    # ==========================================
+    # ⚙️ الإستراتيجية الأولى: القديمة (بولينجر + ذيل الشمعة)
+    # ==========================================
+    def analyze_old_strategy(self, s, tf, reg):
         b = self.ohlcv(s, tf, 200)
         if not b: return False, 0, 0, 0, 0
         df = pd.DataFrame(b, columns=['t','o','h','l','c','v'])
@@ -105,7 +108,6 @@ class FuturesBot:
         if tf == '15m':
             if l['atr'] is None: return False, 0, 0, 0, 0
             vs = l['v'] > (l['vm'] * 1.5)
-            # 🦈 Liquidity Grab (ذيل الشمعة)
             prev_body = abs(p['o'] - p['c'])
             
             if reg == "uptrend":
@@ -120,6 +122,57 @@ class FuturesBot:
                 if cond: return True, l['c'], l['rsi'], l['bbl'], l['bbh']
         return False, 0, 0, 0, 0
 
+    # ==========================================
+    # 🚀 الإستراتيجية الثانية: الجديدة (دونشين + 200 + فوليوم + ATR)
+    # ==========================================
+    def analyze_donchian_strategy(self, s, tf):
+        b = self.ohlcv(s, tf, 50) # نحتاج 50 شمعة لتطابق 200 و 20 معاً
+        if not b or len(b) < 50: return None, 0, 0
+        df = pd.DataFrame(b, columns=['t','o','h','l','c','v'])
+        
+        # 1. EMA 200
+        df['e2'] = ta.trend.ema_indicator(df['c'], 200)
+        # 2. قناة دونشين (أعلى وأدنى سعر لـ 20 شمعة)
+        df['dc_upper'] = df['h'].rolling(20).max()
+        df['dc_lower'] = df['l'].rolling(20).min()
+        # 3. الفوليوم
+        df['vm'] = df['v'].rolling(20).mean()
+        # 4. RSI للزخم
+        df['rsi'] = ta.momentum.rsi(df['c'], 14)
+        # 5. ATR لوقف الخسارة
+        df['atr'] = ta.volatility.AverageTrueRange(df['h'], df['l'], df['c'], 14).average_true_range()
+        
+        l = df.iloc[-1] # الشمعة الحالية
+        p = df.iloc[-2] # الشمعة السابقة (مهم للتأكد من الكسر الفعلي)
+        
+        if pd.isna(l['atr']) or pd.isna(l['dc_upper']): return None, 0, 0
+        
+        vs = l['v'] > l['vm'] # شرط الفوليوم
+        
+        # إشارة الصعود: كسر سقف القناة + السعر فوق 200 + فوليوم + زخم
+        long_cond = (
+            (l['c'] > l['e2']) and              # فوق 200
+            (l['c'] > l['dc_upper']) and        # كسر السقف (الشمعة الحالية أغلقت فوقه)
+            (p['c'] <= p['dc_upper']) and       # الشمعة السابقة كانت تحته (ضمان عدم الدخول المتأخر)
+            vs and (l['rsi'] > 50)              # زخم إيجابي
+        )
+        
+        # إشارة الهبوط: كسر أرضية القناة + السعر تحت 200 + فوليوم + زخم سلبي
+        short_cond = (
+            (l['c'] < l['e2']) and              
+            (l['c'] < l['dc_lower']) and        
+            (p['c'] >= p['dc_lower']) and       
+            vs and (l['rsi'] < 50)              
+        )
+        
+        if long_cond: return 'long', l['c'], l['atr']
+        if short_cond: return 'short', l['c'], l['atr']
+        
+        return None, 0, 0
+
+    # ==========================================
+    # 💰 حساب الكمية (محفوظ)
+    # ==========================================
     def calc_qty(self, s, p):
         b = float(self.bal().get('USDT', {}).get('free', 0))
         if b == 0: return 0
@@ -128,13 +181,10 @@ class FuturesBot:
         df = pd.DataFrame(bars, columns=['t','o','h','l','c','v'])
         atr = ta.volatility.AverageTrueRange(high=df['h'], low=df['l'], close=df['c'], window=14).average_true_range().iloc[-1]
         if pd.isna(atr) or atr <= 0: return 0
-        
-        # ✅ تصحيح المخاطرة 8% والمعادلة
         risk = b * (0.75 if self.losses >= 3 else 8.0) / 100
         sl_dist = 2.5 * atr
         if sl_dist <= 0: return 0
-        qty = risk / sl_dist # الحساب الدقيق
-        
+        qty = risk / sl_dist
         try:
             m = self.ex.market(s); fq = self.ex.amount_to_precision(s, qty)
             mn = m.get('limits', {}).get('amount', {}).get('min')
@@ -142,26 +192,25 @@ class FuturesBot:
         except: fq = self.ex.amount_to_precision(s, qty)
         return float(fq) if float(fq) > 0 else 0
 
+    # ==========================================
+    # 🛑 الإغلاق (محفوظ)
+    # ==========================================
     def close(self, reason, pct, loss=False, partial=False):
         if not self.trade: return
         s = self.trade['s']; d = self.trade['d']
         q = float(self.trade['q'])
         if partial: q = q / 2.0
-        
         close_type = 'sell' if d == 'long' else 'buy'
         fq = float(self.ex.amount_to_precision(s, q))
         if fq <= 0: return
-        
         t = self.tick(s); xp = self.trade['e'] if not t else t['last']
         if not self.order(close_type, s, fq): self.send(f"🚨 فشل إغلاق {d} {s}"); return
-        
         if partial:
             self.trade['q'] = str(float(self.trade['q']) - fq)
             self.trade['partial_closed'] = True
-            self.trade['sl'] = self.trade['e'] # تحريك الوقف للدخول
+            self.trade['sl'] = self.trade['e']
             self.send(f"⚡ *إغلاق جزئي (50%)*\n🪙 {s} ({d})\n💰 secured: {pct:.2f}%\n🛑 SL للدخول")
             return
-
         self.trk.add(s, d, self.trade['e'], xp, q, pct, reason)
         if loss:
             self.losses += 1; tb = float(self.bal().get('USDT', {}).get('free', 0))
@@ -171,45 +220,90 @@ class FuturesBot:
             self.losses = 0; self.send(f"🏆 ربح {d} {s}: {pct:.2f}% | {reason}")
         self.trade = None
 
+    # ==========================================
+    # 🔄 المحرك الرئيسي (محدث لتشغيل الإستراتيجيتين معاً)
+    # ==========================================
     def run(self):
-        self.send("🚀 *الوحش V4 جاهز على السيرفر!*")
-        print("\n🚀 بدء حلقة العقود الآجلة (8% Risk, 10X Leverage)...")
+        self.send("🚀 *الوحش V5 (مزدوج) جاهز على السيرفر!*")
+        print("\n🚀 بدء المحرك المزدوج...")
         while True:
             if self.date != datetime.date.today(): self.dloss = 0.0; self.date = datetime.date.today()
             try:
-                if self.dloss >= 20.0: self.send("🛑 حد خسارة يومي 20% (بسبب الرافعة)"); time.sleep(3600); continue
+                if self.dloss >= 20.0: self.send("🛑 حد خسارة يومي 20%"); time.sleep(3600); continue
+                
                 if not self.trade:
-                    print("🔍 جاري فحص البيتكوين والعملات...")
+                    print("🔍 جاري الفحص المزدوج...", end='\r')
                     btc_rsi = self.get_btc_rsi()
                     if btc_rsi < 40 or btc_rsi > 60: 
-                        print(f"⚠️ البيتكين متطرف (RSI: {btc_rsi:.1f}). تجاهل."); time.sleep(60); continue
+                        print(f"⚠️ BTC متطرف (RSI: {btc_rsi:.1f}). تجاهل.", end='\r'); time.sleep(60); continue
+                    
                     tk = self.ticks()
                     if not tk: time.sleep(30); continue
                     syms = [s for s, i in tk.items() if s.endswith('/USDT:USDT') and i.get('quoteVolume') and i.get('last') and (i['quoteVolume']*i['last'] > 1000000)][:100]
                     if not syms: time.sleep(60); continue
+                    
                     for s in syms:
-                        print(f"-> تحليل {s}...", end='\r')
                         rg = self.regime(s)
-                        if rg not in ["uptrend", "downtrend"]: continue
-                        ok, p, rsi, bbl, bbh = self.analyze(s, '15m', rg)
-                        if ok:
-                            q = self.calc_qty(s, p)
-                            if q <= 0: continue
-                            direction = 'long' if rg == "uptrend" else 'short'
-                            self.setup_futures(s, direction)
-                            if self.order('buy' if direction == 'long' else 'sell', s, q):
+                        entered = False
+                        strategy_used = ""
+                        direction = None
+                        price = 0
+                        sl_dist = 0
+                        
+                        # ============================================
+                        # المحاولة الأولى: الاستراتيجية القديمة (إن كان السوق متجهاً)
+                        # ============================================
+                        if rg in ["uptrend", "downtrend"]:
+                            ok, p, rsi, bbl, bbh = self.analyze_old_strategy(s, '15m', rg)
+                            if ok:
+                                direction = 'long' if rg == "uptrend" else 'short'
+                                price = p
+                                # حساب SL للإستراتيجية القديمة
                                 bars = self.ohlcv(s, '15m', 19)
                                 df = pd.DataFrame(bars, columns=['t','o','h','l','c','v'])
                                 atr = ta.volatility.AverageTrueRange(high=df['h'], low=df['l'], close=df['c'], window=14).average_true_range().iloc[-1]
-                                if direction == 'long': sl = p * (1 - 2.5 * atr / p) if not pd.isna(atr) else p * 0.975
-                                else: sl = p * (1 + 2.5 * atr / p) if not pd.isna(atr) else p * 1.025
+                                sl_dist = 2.5 * atr if not pd.isna(atr) else p * 0.025
+                                strategy_used = "[استراتيجية 1] بولينجر/ماكدي"
+                                entered = True
                                 
-                                self.trade = {'s': s, 'd': direction, 'e': p, 'sl': sl, 'isl': sl, 'hp': p, 'lp': p, 'time': time.time(), 'q': q, 'pyramided': False, 'partial_closed': False}
+                        # ============================================
+                        # المحاولة الثانية: الاستراتيجية الجديدة (دونشين) تعمل في كل الحالات
+                        # ============================================
+                        if not entered:
+                            donch_dir, donch_p, donch_atr = self.analyze_donchian_strategy(s, '15m')
+                            if donch_dir:
+                                direction = donch_dir
+                                price = donch_p
+                                # حساب SL للدونشين (أقرب قليلاً لأن الكسر حاد)
+                                sl_dist = 1.5 * donch_atr 
+                                strategy_used = "[استراتيجية 2] كسر دونشين"
+                                entered = True
+
+                        # ============================================
+                        # تنفيذ الصفقة إذا نجحت أي محاولة
+                        # ============================================
+                        if entered and direction and price > 0 and sl_dist > 0:
+                            q = self.calc_qty(s, price)
+                            if q <= 0: continue
+                            
+                            self.setup_futures(s, direction)
+                            if self.order('buy' if direction == 'long' else 'sell', s, q):
+                                if direction == 'long': sl = price - sl_dist
+                                else: sl = price + sl_dist
+                                
+                                self.trade = {
+                                    's': s, 'd': direction, 'e': price, 'sl': sl, 'isl': sl, 
+                                    'hp': price, 'lp': price, 'time': time.time(), 'q': q, 
+                                    'pyramided': False, 'partial_closed': False,
+                                    'strategy': strategy_used # لحفظ نوع الاستراتيجية
+                                }
                                 emoji = "🟢LONG" if direction == 'long' else "🔴SHORT"
-                                self.send(f"{emoji} *عقد جديد*\n🪙 {s}\n💵 {p:.4f}\n⚖️ {q:.4f}\n🛑 SL: {sl:.4f}")
-                                print(f"\n🎯 تم فتح {emoji} على {s}!\n")
+                                self.send(f"{emoji} *عقد جديد*\n{strategy_used}\n🪙 {s}\n💵 {price:.4f}\n⚖️ {q:.4f}\n🛑 SL: {sl:.4f}")
+                                print(f"\n🎯 تم فتح {emoji} ({strategy_used}) على {s}!\n")
                                 self.losses = 0; break
+                
                 else:
+                    # منطقة إدارة الصفقة المفتوحة (لم تتغير)
                     s = self.trade['s']; d = self.trade['d']; t = self.tick(s)
                     if not t: time.sleep(15); continue
                     cp = t['last']; ep = self.trade['e']
@@ -217,27 +311,23 @@ class FuturesBot:
                     if d == 'long' and cp > self.trade['hp']: self.trade['hp'] = cp
                     if d == 'short' and cp < self.trade['lp']: self.trade['lp'] = cp
                     hpp = ((self.trade['hp'] - ep) / ep * 100) if d == 'long' else ((ep - self.trade['lp']) / ep * 100)
-                    print(f"⏱️ {d} {s} | الربح: {pp:.2f}% | SL: {self.trade['sl']:.4f}     ", end='\r')
+                    
+                    strat_name = self.trade.get('strategy', "")
+                    print(f"⏱️ {d} {s} | {strat_name} | ربح: {pp:.2f}%     ", end='\r')
                     
                     ssl = self.trade['sl']
                     if d == 'long' and cp <= ssl: self.close("🛑 SL Long", pp, True); continue
                     if d == 'short' and cp >= ssl: self.close("🛑 SL Short", pp, True); continue
                     
-                    # 🦈 Volume Climax
                     bars = self.ohlcv(s, '15m', 20)
                     if bars:
                         df = pd.DataFrame(bars, columns=['t','o','h','l','c','v'])
                         vol_ma = df['v'].rolling(20).mean().iloc[-1]
                         if df.iloc[-1]['v'] > (vol_ma * 4): self.close("🔥 انفجار فوليوم", pp, False); continue
 
-                    # ⏳ وقف زمني
                     if time.time() - self.trade['time'] > 3600 and abs(pp) < 1.0: self.close("⏳ انتهاء الوقت", pp, pp<0); continue
+                    if pp >= 3.0 and not self.trade.get('partial_closed'): self.close("⚡ جزئي 50%", pp, partial=True); continue
                     
-                    # ⚡ الإغلاق الجزئي
-                    if pp >= 3.0 and not self.trade.get('partial_closed'):
-                        self.close("⚡ جزئي 50%", pp, partial=True); continue
-                    
-                    # 🚀 التعزيز
                     if pp >= 2.0 and not self.trade.get('pyramided'):
                         add_q = self.calc_qty(s, cp)
                         if add_q > 0:
@@ -248,10 +338,8 @@ class FuturesBot:
                                 self.send(f"🚀 *تعزيز!* {s}\nمضاعفة العقد: {self.trade['q']}")
                                 time.sleep(2); continue
 
-                    # 🎯 هدف نهائي 10%
                     if pp >= 10.0: self.close("🎯 الهدف 10%", pp, False); continue
                     
-                    # التريلينغ ستوب
                     if hpp >= 2.5:
                         if d == 'long':
                             nsl = self.trade['hp'] * (1 - 0.5 / 100)
