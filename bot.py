@@ -29,12 +29,10 @@ class FuturesBot:
         self.trade = None; self.losses = 0; self.dloss = 0.0; self.date = None; self.rtime = datetime.datetime.now()
         self.LEVERAGE = 10 
         
-        # إعدادات الفلاتر لاستراتيجية نيويورك
         self.NY_EMA_FILTER = True    
         self.NY_RSI_FILTER = True    
         self.NY_VOL_FILTER = True    
         self.NY_CANDLE_FILTER = True 
-        # ✅ تقليل المخاطرة لاستراتيجية نيويورك فقط (5% بدل 8%)
         self.NY_RISK_PCT = 5.0      
 
         self.send("🔄 جاري التحقق من الصفقات المفتوحة...")
@@ -153,23 +151,16 @@ class FuturesBot:
         if short_cond: return 'short', l['c'], l['atr']
         return None, 0, 0
 
-    # ==========================================
-    🗽 الساعة الذكية (تعديل التوقيت التلقائي)
-    # ==========================================
     def _get_ny_open_hour_utc(self):
         now = datetime.datetime.utcnow()
         year = now.year
-        # التوقيت الصيفي في أمريكا يبدأ في منتصف مارس وينتهي في أوائل نوفمبر
-        dst_start = datetime.datetime(year, 3, 14) # ثاني يوم أحد من مارس تقريباً
-        dst_end = datetime.datetime(year, 11, 7)   # أول يوم أحد من نوفمبر تقريباً
+        dst_start = datetime.datetime(year, 3, 14)
+        dst_end = datetime.datetime(year, 11, 7)
         if dst_start <= now <= dst_end:
-            return 13 # التوقيت الصيفي (EDT = UTC - 4) -> 9:30 AM = 13:30 UTC
+            return 13 
         else:
-            return 14 # التوقيت الشتوي (EST = UTC - 5) -> 9:30 AM = 14:30 UTC
+            return 14
 
-        # ==========================================
-    🗽 استراتيجية حيلة نيويورك (مع النافذة الزمنية الذهبية)
-    # ==========================================
     def analyze_ny_breakout(self, s):
         now_utc = datetime.datetime.utcnow()
         ny_hour = self._get_ny_open_hour_utc()
@@ -182,7 +173,6 @@ class FuturesBot:
         df = pd.DataFrame(bars, columns=['t','o','h','l','c','v'])
         df['time'] = pd.to_datetime(df['t'], unit='ms')
         
-        # 1. تحديد شمعة 9:30 صباحاً
         ref_mask = (df['time'].dt.hour == ny_hour) & (df['time'].dt.minute == 30) & (df['time'].dt.date == now_utc.date())
         ref_candles = df[ref_mask]
         if ref_candles.empty: return None, 0, 0
@@ -190,22 +180,18 @@ class FuturesBot:
         ref_high = ref_candles.iloc[0]['h']
         ref_low = ref_candles.iloc[0]['l']
         
-        # الشموع التي جاءت بعد الافتتاح
         future_bars = df[df['time'] > ref_candles.iloc[0]['time']]
         
-        # ✅ السحر الجديد: نأخذ فقط آخر 5 شموع (75 دقيقة) للتحقق من الـ Retest
-        # هذا يمنع الدخول المتأخر ويضمن قوة الارتداد
+        # ✅ نأخذ فقط آخر 5 شموع للتحقق من الـ Retest السريع
         recent_bars = future_bars.tail(5)
-        if len(recent_bars) < 3: return None, 0, 0 # نحتاج 3 شموع على الأقل لكي يحدث كسر ثم retest ثم ارتداد
+        if len(recent_bars) < 3: return None, 0, 0 
         
-        l = recent_bars.iloc[-1] # الشمعة الحالية
-        p = recent_bars.iloc[-2] # الشمعة السابقة
+        l = recent_bars.iloc[-1] 
+        p = recent_bars.iloc[-2] 
         
-        # حساب المؤشرات المطلوبة للفلاتر
         df['e2'] = ta.trend.ema_indicator(df['c'], window=200)
         df['rsi'] = ta.momentum.rsi(df['c'], window=14)
         
-        # تحسين الفوليوم: التحقق من تصاعد الفوليوم
         df['vm'] = df['v'].rolling(20).mean()
         vol_trend = future_bars['v'].rolling(5).mean()
         vs = (l['v'] > l['vm'] * 1.2) and (vol_trend.iloc[-1] > vol_trend.iloc[-2]) if self.NY_VOL_FILTER else True
@@ -213,18 +199,13 @@ class FuturesBot:
         df['atr'] = ta.volatility.AverageTrueRange(df['h'], df['l'], df['c'], window=14).average_true_range()
         if pd.isna(l['e2']) or pd.isna(l['rsi']) or pd.isna(l['atr']) or pd.isna(l['vm']): return None, 0, 0
         
-        # فلتر الشمعة القوية
         body = abs(l['c'] - l['o'])
         upper_wick = l['h'] - max(l['c'], l['o'])
         lower_wick = min(l['c'], l['o']) - l['l']
         is_strong_candle = (body > (upper_wick + lower_wick)) if self.NY_CANDLE_FILTER else True
         
-        # ==========================================
-        # منطق الشراء (Long) مع Retest سريع
-        # ==========================================
-        long_break = any(recent_bars['c'] > ref_high) # هل حدث كسر في آخر 5 شموع؟
+        long_break = any(recent_bars['c'] > ref_high) 
         if long_break:
-            # هل الشمعة السابقة لمست الخط؟ وهل الشمعة الحالية أغلقت فوقه؟ (هذا هو Retest الحقيقي)
             long_retest = p['l'] <= ref_high 
             long_entry = l['c'] > ref_high 
             
@@ -233,12 +214,8 @@ class FuturesBot:
                     if not self.NY_RSI_FILTER or l['rsi'] > 50:
                         return 'long', l['c'], l['atr'] * 1.5
 
-        # ==========================================
-        # منطق البيع (Short) مع Retest سريع
-        # ==========================================
-        short_break = any(recent_bars['c'] < ref_low) # هل حدث كسر في آخر 5 شموع؟
+        short_break = any(recent_bars['c'] < ref_low) 
         if short_break:
-            # هل الشمعة السابقة لمست الخط من الأعلى؟ وهل الشمعة الحالية أغلقت تحته؟
             short_retest = p['h'] >= ref_low
             short_entry = l['c'] < ref_low
             
@@ -248,58 +225,7 @@ class FuturesBot:
                         return 'short', l['c'], l['atr'] * 1.5
                             
         return None, 0, 0
-        
-        l = future_bars.iloc[-1]
-        p = future_bars.iloc[-2]
-        
-        df['e2'] = ta.trend.ema_indicator(df['c'], window=200)
-        df['rsi'] = ta.momentum.rsi(df['c'], window=14)
-        
-        # ✅ تحسين الفوليوم: التحقق من تصاعد الفوليوم وليس مجرد كونه أعلى من المتوسط
-        df['vm'] = df['v'].rolling(20).mean()
-        vol_trend = future_bars['v'].rolling(5).mean()
-        vs = (l['v'] > l['vm'] * 1.2) and (vol_trend.iloc[-1] > vol_trend.iloc[-2]) if self.NY_VOL_FILTER else True
-        
-        df['atr'] = ta.volatility.AverageTrueRange(df['h'], df['l'], df['c'], window=14).average_true_range()
-        if pd.isna(l['e2']) or pd.isna(l['rsi']) or pd.isna(l['atr']) or pd.isna(l['vm']): return None, 0, 0
-        
-        # فلتر الشمعة القوية
-        body = abs(l['c'] - l['o'])
-        upper_wick = l['h'] - max(l['c'], l['o'])
-        lower_wick = min(l['c'], l['o']) - l['l']
-        is_strong_candle = (body > (upper_wick + lower_wick)) if self.NY_CANDLE_FILTER else True
-        
-        # منطق الشراء (Long) مع Retest
-        long_break_idx = future_bars[future_bars['c'] > ref_high].index[0] if any(future_bars['c'] > ref_high) else None
-        if long_break_idx is not None:
-            bars_after_break = future_bars.loc[long_break_idx+1:]
-            if not bars_after_break.empty:
-                long_retest = bars_after_break['l'].min() <= ref_high
-                long_entry = l['c'] > ref_high and p['c'] <= ref_high 
-                
-                if long_retest and long_entry and is_strong_candle and vs:
-                    if not self.NY_EMA_FILTER or l['c'] > l['e2']:
-                        if not self.NY_RSI_FILTER or l['rsi'] > 50:
-                            return 'long', l['c'], l['atr'] * 1.5
 
-        # منطق البيع (Short) مع Retest
-        short_break_idx = future_bars[future_bars['c'] < ref_low].index[0] if any(future_bars['c'] < ref_low) else None
-        if short_break_idx is not None:
-            bars_after_break = future_bars.loc[short_break_idx+1:]
-            if not bars_after_break.empty:
-                short_retest = bars_after_break['h'].max() >= ref_low
-                short_entry = l['c'] < ref_low and p['c'] >= ref_low
-                
-                if short_retest and short_entry and is_strong_candle and vs:
-                    if not self.NY_EMA_FILTER or l['c'] < l['e2']:
-                        if not self.NY_RSI_FILTER or l['rsi'] < 50:
-                            return 'short', l['c'], l['atr'] * 1.5
-                            
-        return None, 0, 0
-
-    # ==========================================
-    💰 حساب الكمية (يدعم تغيير المخاطرة لنيويورك فقط)
-    # ==========================================
     def calc_qty(self, s, p, risk_override=None):
         b = self.bal()
         if b == 0: return 0
@@ -309,7 +235,6 @@ class FuturesBot:
         atr = ta.volatility.AverageTrueRange(high=df['h'], low=df['l'], close=df['c'], window=14).average_true_range().iloc[-1]
         if pd.isna(atr) or atr <= 0: return 0
         
-        # ✅ إذا تم تمرير نسبة مخاطرة مخصصة (لنيويورك) استخدمها، وإلا استخدم الافتراضية
         risk_pct = risk_override if risk_override is not None else (0.75 if self.losses >= 3 else 8.0)
         risk = b * (risk_pct / 100)
         
@@ -372,7 +297,6 @@ class FuturesBot:
                         entered = False; strategy_used = ""; direction = None; price = 0; sl_dist = 0
                         qty_to_use = 0
                         
-                        # 1: الاستراتيجية القديمة (مخاطرة 8%)
                         if rg in ["uptrend", "downtrend"]:
                             ok, p, rsi, bbl, bbh = self.analyze_old_strategy(s, '15m', rg)
                             if ok:
@@ -385,7 +309,6 @@ class FuturesBot:
                                 strategy_used = "[استراتيجية 1] بولينجر/ماكدي"
                                 entered = True
                                 
-                        # 2: استراتيجية دونشين (مخاطرة 8%)
                         if not entered:
                             donch_dir, donch_p, donch_atr = self.analyze_donchian_strategy(s, '15m')
                             if donch_dir:
@@ -393,17 +316,14 @@ class FuturesBot:
                                 strategy_used = "[استراتيجية 2] كسر دونشين"
                                 entered = True
 
-                        # 3: استراتيجية حيلة نيويورك (✅ مخاطرة 5% فقط)
                         if not entered:
                             ny_dir, ny_p, ny_sl = self.analyze_ny_breakout(s)
                             if ny_dir:
                                 direction = ny_dir; price = ny_p; sl_dist = ny_sl
-                                strategy_used = "🗽 [استراتيجية 3] NY Retest (مخاطر منخفضة)"
+                                strategy_used = "🗽 [استراتيجيجية 3] NY Retest (مخاطر منخفضة)"
                                 entered = True
 
-                        # تنفيذ الصفقة
                         if entered and direction and price > 0 and sl_dist > 0:
-                            # ✅ تمرير نسبة المخاطرة الصغيرة فقط إذا كانت نيويورك
                             risk_val = self.NY_RISK_PCT if "نيويورك" in strategy_used or "NY" in strategy_used else None
                             q = self.calc_qty(s, price, risk_override=risk_val)
                             if q <= 0: continue
