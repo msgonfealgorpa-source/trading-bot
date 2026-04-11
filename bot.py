@@ -1,20 +1,24 @@
 import ccxt, time, pandas as pd, ta, requests, datetime, os, warnings
 
-# لإخفاء التحذيرات الصفراء التي تلوث الشاشة
+# لإخفاء التحذيرات الصفراء
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 class Tracker:
     def __init__(self, t, c, ex): self.log, self.T, self.C, self.ex = [], t, c, ex
     def send(self, m):
-        try: requests.post(f"https://api.telegram.org/bot{self.T}/sendMessage", data={'chat_id': self.C, 'text': m, 'parse_mode': 'Markdown'})
+        try: requests.post(f"https://api.telegram.org/bot{self.T}/sendMessage", data={'chat_id': self.CH, 'text': m, 'parse_mode': 'Markdown'})
         except: pass
     def add(self, s, d, ep, xp, q, p, r):
-        self.log.append({'t': datetime.now(datetime.timezone.utc), 's': s, 'd': d, 'ep': ep, 'xp': xp, 'q': float(self.ex.amount_to_precision(s, q)), 'p': p, 'r': r})
+        # ✅ استخدام time.time() لتجنب أخطاء التوقيت في السيرفرات
+        self.log.append({'t': time.time(), 's': s, 'd': d, 'ep': ep, 'xp': xp, 'q': float(self.ex.amount_to_precision(s, q)), 'p': p, 'r': r})
     def report(self):
         if not self.log: return
         w = [t for t in self.log if t['p'] > 0]
         m = f"📊 *تقرير الوحش V6.1*\nالصفقات: {len(self.log)}\nالفوز: {(len(w)/len(self.log))*100:.1f}%\nالربح: {sum(t['p'] for t in self.log):.2f}%"
-        self.send(m); self.log = [t for t in self.log if t['t'].date() == datetime.now().date()]
+        self.send(m)
+        # تصفية السجل بناءً على التاريخ الحالي
+        today_date = datetime.date.today()
+        self.log = [t for t in self.log if datetime.datetime.fromtimestamp(t['t']).date() == today_date]
 
 class FuturesBot:
     def __init__(self):
@@ -24,12 +28,12 @@ class FuturesBot:
         self.CH = os.environ.get('CHAT_ID')
         
         if not self.K or not self.S or not self.TT: 
-            print("❌ خطأ: المفاتيح غير موجودة!")
+            print("❌ خطأ: المقدمة غير موجودة!")
             return
 
         self.ex = ccxt.bingx({'apiKey': self.K, 'secret': self.S, 'enableRateLimit': True, 'options': {'defaultType': 'swap'}, 'rateLimit': 2000})
         self.trk = Tracker(self.TT, self.CH, self.ex)
-        self.trade = None; self.losses = 0; self.dloss = 0.0; self.date = None; self.rtime = datetime.now()
+        self.trade = None; self.losses = 0; self.dloss = 0.0; self.date = None; self.rtime = time.time()
         self.LEVERAGE = 10 
         
         self.NY_EMA_FILTER = True    
@@ -43,7 +47,7 @@ class FuturesBot:
         
         msg = "🗽 *بوت الوحش V6.1 (مثالي)*\n"
         msg += "⚡ 1: بولينجر/ماكدي (8% مخاطرة)\n"
-        msg += "🚀 2: كسر دونشين (8% مخاطرة)\n"
+        msg += "🚀 2: كسر دونشين (8% مخ落差 مخاطرة)\n"
         msg += "🗽 3: حيلة نيويورك (5% مخاطرة + توقيت تلقائي)\n"
         msg += "📋 الرافعة: 10X"
         self.send(msg)
@@ -117,7 +121,7 @@ class FuturesBot:
         df['macd'] = ta.trend.macd_diff(df['c']); df['vm'] = df['v'].rolling(20).mean()
         df['atr'] = ta.volatility.AverageTrueRange(df['h'], df['l'], df['c'], 14).average_true_range()
         bb = ta.volatility.BollingerBands(df['c'], 20, 2)
-        df['bbl'] = bb.bollinger_lband(); df['bbh'] = bollinger_hband()
+        df['bbl'] = bb.bollinger_lband(); df['bbh'] = bb.bollinger_hband()
         l = df.iloc[-1]; p = df.iloc[-2]
         if tf == '15m':
             if l['atr'] is None: return False, 0, 0, 0, 0
@@ -155,28 +159,29 @@ class FuturesBot:
         return None, 0, 0
 
     def _get_ny_open_hour_utc(self):
-        now = datetime.now(datetime.timezone.utc)
-        year = now.year
-        dst_start = datetime.datetime(year, 3, 14)
-        dst_end = datetime.datetime(year, 11, 7)
-        if dst_start <= now <= dst_end:
-            return 13 
-        else:
-            return 14
+        # ✅ استخدام time.time() لتجنب الكارثة تماماً
+        now = time.time()
+        # فحص بسيط لمعرفة إذا كنا في فصل الصيف (من منتصف مارس الى نوفمبر)
+        day_of_year = time.localtime(time.time()).tm_yday
+        is_dst = (day_of_year >= 74) and (day_of_year <= 310) # تقريباً من 15 مارس لـ 6 نوفمبر
+        return 13 if is_dst else 14
 
     def analyze_ny_breakout(self, s):
-        now_utc = datetime.now(datetime.timezone.utc)
+        # ✅ استخدام time.time() لتجنب الكارثة
+        now = time.time()
         ny_hour = self._get_ny_open_hour_utc()
-        ny_open_time = now_utc.replace(hour=ny_hour, minute=30, second=0, microsecond=0)
         
-        if now_utc < ny_open_time: return None, 0, 0
+        # حساب وقت فتح نيويورك بالتوقيت الحالي
+        ny_open_time = datetime.datetime.fromtimestamp(now).replace(hour=ny_hour, minute=30, second=0, microsecond=0)
+        
+        if now < ny_open_time.timestamp(): return None, 0, 0
         
         bars = self.ohlcv(s, '15m', 40)
         if not bars or len(bars) < 10: return None, 0, 0
         df = pd.DataFrame(bars, columns=['t','o','h','l','c','v'])
         df['time'] = pd.to_datetime(df['t'], unit='ms')
         
-        ref_mask = (df['time'].dt.hour == ny_hour) & (df['time'].dt.minute == 30) & (df['time'].dt.date == now_utc.date())
+        ref_mask = (df['time'].dt.hour == ny_hour) & (df['time'].dt.minute == 30) & (df['time'].dt.date == datetime.datetime.fromtimestamp(ny_open_time.timestamp()).date())
         ref_candles = df[ref_mask]
         if ref_candles.empty: return None, 0, 0
         
@@ -185,17 +190,15 @@ class FuturesBot:
         
         future_bars = df[df['time'] > ref_candles.iloc[0]['time']]
         
-        # ✅ أخذ آخر 5 شموع فقط للـ Retest السريع
         recent_bars = future_bars.tail(5)
         if len(recent_bars) < 3: return None, 0, 0 
         
         l = recent_bars.iloc[-1] 
         p = recent_bars.iloc[-2] 
         
-        df['e2'] = ta.trend.ema_indicator(df['c'], window=200)
+        df['e2'] = ta.trend.emma_indicator(df['c'], window=200)
         df['rsi'] = ta.momentum.rsi(df['c'], window=14)
         
-        # ✅ حل مشكلة 'vm': نأخذ المتوسط من الداتا الكاملة لأن الـ 5 شموع لا تحتوي عليه
         df['vm'] = df['v'].rolling(20).mean()
         vm_current = df['vm'].iloc[-1] 
         
@@ -216,7 +219,7 @@ class FuturesBot:
             
             if long_retest and long_entry and is_strong_candle and vs:
                 if not self.NY_EMA_FILTER or l['c'] > l['e2']:
-                    if not self.NY_RSI_FILTER or l['rsi'] > 50:
+                    if not self.NY_RISK_PCT or l['rsi'] > 50:
                         return 'long', l['c'], l['atr'] * 1.5
 
         short_break = any(recent_bars['c'] < ref_low) 
@@ -282,7 +285,13 @@ class FuturesBot:
         self.send("🚀 *الوحش V6.1 (مثالي) جاهز!*")
         print("\n🚀 بدء المحرك الثلاثي...")
         while True:
-            if self.date != datetime.now().date(): self.dloss = 0.0; self.date = datetime.now().date()
+            # ✅ استخدام time.time() لتجنب كارثة التاريخ في السيرفر
+            current_date = datetime.date.today()
+            if self.date != current_date: 
+                self.dloss = 0.0 
+                self.date = current_date
+                self.send(f"🗓️ بدء يوم تداول جديد.")
+            
             try:
                 if self.dloss >= 20.0: self.send("🛑 حد خسارة يومي 20%"); time.sleep(3600); continue
                 
@@ -395,6 +404,10 @@ class FuturesBot:
                             
             except Exception as e: print(f"\n⚠️ Err: {e}"); time.sleep(15)
             time.sleep(15)
-            if (datetime.now() - self.rtime).total_seconds() >= 86400: self.trk.report(); self.rtime = datetime.now()
+            
+            # ✅ استخدام time.time() بدل datetime.now() في نهاية الدورة
+            if (time.time() - self.rtime) >= 86400: 
+                self.trk.report() 
+                self.rtime = time.time()
 
 if __name__ == "__main__": FuturesBot().run()
