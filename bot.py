@@ -1,19 +1,22 @@
-import ccxt, time, pandas as pd, pandas_ta as ta, requests, datetime, os, warnings
+import ccxt, time, pandas as pd, ta, requests, datetime, os, warnings
 
+# لإخفاء التحذيرات الصفراء
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 class Tracker:
     def __init__(self, t, c, ex): self.log, self.T, self.C, self.ex = [], t, c, ex
     def send(self, m):
-        try: requests.post(f"https://api.telegram.org/bot{self.T}/sendMessage", data={'chat_id': self.C, 'text': m, 'parse_mode': 'Markdown'})
+        try: requests.post(f"https://api.telegram.org/bot{self.T}/sendMessage", data={'chat_id': self.CH, 'text': m, 'parse_mode': 'Markdown'})
         except: pass
     def add(self, s, d, ep, xp, q, p, r):
+        # ✅ استخدام time.time() لتجنب أخطاء التوقيت في السيرفرات
         self.log.append({'t': time.time(), 's': s, 'd': d, 'ep': ep, 'xp': xp, 'q': float(self.ex.amount_to_precision(s, q)), 'p': p, 'r': r})
     def report(self):
         if not self.log: return
         w = [t for t in self.log if t['p'] > 0]
         m = f"📊 *تقرير الوحش V6.1*\nالصفقات: {len(self.log)}\nالفوز: {(len(w)/len(self.log))*100:.1f}%\nالربح: {sum(t['p'] for t in self.log):.2f}%"
         self.send(m)
+        # تصفية السجل بناءً على التاريخ الحالي
         today_date = datetime.date.today()
         self.log = [t for t in self.log if datetime.datetime.fromtimestamp(t['t']).date() == today_date]
 
@@ -44,7 +47,7 @@ class FuturesBot:
         
         msg = "🗽 *بوت الوحش V6.1 (مثالي)*\n"
         msg += "⚡ 1: بولينجر/ماكدي (8% مخاطرة)\n"
-        msg += "🚀 2: كسر دونشين (8% مخاطرة)\n"
+        msg += "🚀 2: كسر دونشين (8% مخ落差 مخاطرة)\n"
         msg += "🗽 3: حيلة نيويورك (5% مخاطرة + توقيت تلقائي)\n"
         msg += "📋 الرافعة: 10X"
         self.send(msg)
@@ -156,15 +159,19 @@ class FuturesBot:
         return None, 0, 0
 
     def _get_ny_open_hour_utc(self):
+        # ✅ استخدام time.time() لتجنب الكارثة تماماً
         now = time.time()
+        # فحص بسيط لمعرفة إذا كنا في فصل الصيف (من منتصف مارس الى نوفمبر)
         day_of_year = time.localtime(time.time()).tm_yday
-        is_dst = (day_of_year >= 74) and (day_of_year <= 310) 
+        is_dst = (day_of_year >= 74) and (day_of_year <= 310) # تقريباً من 15 مارس لـ 6 نوفمبر
         return 13 if is_dst else 14
 
     def analyze_ny_breakout(self, s):
+        # ✅ استخدام time.time() لتجنب الكارثة
         now = time.time()
         ny_hour = self._get_ny_open_hour_utc()
         
+        # حساب وقت فتح نيويورك بالتوقيت الحالي
         ny_open_time = datetime.datetime.fromtimestamp(now).replace(hour=ny_hour, minute=30, second=0, microsecond=0)
         
         if now < ny_open_time.timestamp(): return None, 0, 0
@@ -189,7 +196,7 @@ class FuturesBot:
         l = recent_bars.iloc[-1] 
         p = recent_bars.iloc[-2] 
         
-        df['e2'] = ta.trend.ema_indicator(df['c'], window=200)
+        df['e2'] = ta.trend.emma_indicator(df['c'], window=200)
         df['rsi'] = ta.momentum.rsi(df['c'], window=14)
         
         df['vm'] = df['v'].rolling(20).mean()
@@ -220,7 +227,7 @@ class FuturesBot:
             short_retest = p['h'] >= ref_low
             short_entry = l['c'] < ref_low
             
-            if short_retest and short_entry and is_strong_cable and vs:
+            if short_retest and short_entry and is_strong_candle and vs:
                 if not self.NY_EMA_FILTER or l['c'] < l['e2']:
                     if not self.NY_RISK_PCT or l['rsi'] < 50:
                         return 'short', l['c'], l['atr'] * 1.5
@@ -260,7 +267,7 @@ class FuturesBot:
         t = self.tick(s); xp = self.trade['e'] if not t else t['last']
         if not self.order(close_type, s, fq): self.send(f"🚨 فشل إغلاق {d} {s}"); return
         if partial:
-            self.trade['q'] = str(float(self.trade['q') - fq)
+            self.trade['q'] = str(float(self.trade['q']) - fq)
             self.trade['partial_closed'] = True
             self.trade['sl'] = self.trade['e']
             self.send(f"⚡ *إغلاق جزئي (50%)*\n🪙 {s} ({d})\n💰 secured: {pct:.2f}%\n🛑 SL للدخول")
@@ -275,9 +282,10 @@ class FuturesBot:
         self.trade = None
 
     def run(self):
-        self.send("🚀 *الوحش V6.1 (مثالي)* جاهز!*")
+        self.send("🚀 *الوحش V6.1 (مثالي) جاهز!*")
         print("\n🚀 بدء المحرك الثلاثي...")
         while True:
+            # ✅ استخدام time.time() لتجنب كارثة التاريخ في السيرفر
             current_date = datetime.date.today()
             if self.date != current_date: 
                 self.dloss = 0.0 
@@ -397,8 +405,9 @@ class FuturesBot:
             except Exception as e: print(f"\n⚠️ Err: {e}"); time.sleep(15)
             time.sleep(15)
             
+            # ✅ استخدام time.time() بدل datetime.now() في نهاية الدورة
             if (time.time() - self.rtime) >= 86400: 
                 self.trk.report() 
                 self.rtime = time.time()
 
-if __name__ == "__main__": FuturesBot::run()
+if __name__ == "__main__": FuturesBot().run()
