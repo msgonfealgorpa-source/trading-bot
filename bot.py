@@ -52,7 +52,10 @@ class FuturesBot:
         return None
     def ohlcv(self, s, tf, l): return self.retry('fetch_ohlcv', s, tf, limit=l)
     def tick(self, s): return self.retry('fetch_ticker', s)
-    def bal(self): return self.retry('fetch_balance')
+        def bal(self): 
+        # إجبار البوت على قراءة الرصيد من حساب العقود الآجلة فقط
+        b = self.retry('fetch_balance', {'type': 'swap'})
+        return float(b.get('USDT', {}).get('free', 0))
     def ticks(self): return self.retry('fetch_tickers')
     
     def setup_futures(self, s, d):
