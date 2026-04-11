@@ -1,4 +1,4 @@
-ccxt
-pandas
-ta
-requests
+pandas>=2.1.0
+ta>=0.10.0
+ccxt>=4.0.0
+requests>=2.28.0
