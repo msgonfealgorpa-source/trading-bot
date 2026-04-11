@@ -15,30 +15,37 @@ class Tracker:
 
 class FuturesBot:
     def __init__(self):
-        # 🔒 قراءة المفاتيح من السيرفر بشكل آمن (بدون كتابتها هنا)
+        # 🔒 قراءة المفاتيح من السيرفر بشكل آمن
         self.K = os.environ.get('API_KEY')
         self.S = os.environ.get('API_SECRET')
         self.TT = os.environ.get('TELEGRAM_TOKEN')
         self.CH = os.environ.get('CHAT_ID')
         
         if not self.K or not self.S or not self.TT: 
-            print("❌ خطأ: المفاتيح غير موجودة في السيرفر!")
+            print("❌ خطأ: المفاتيح غير موجودة! (تأكد من اعدادات Railway)")
             return
 
-        self.ex = ccxt.bingx({'apiKey': self.K, 'secret': self.S, 'enableRateLimit': True, 'options': {'defaultType': 'future'}, 'rateLimit': 2000})
+        self.ex = ccxt.bingx({'apiKey': self.K, 'secret': self.S, 'enableRateLimit': True, 'options': {'defaultType': 'swap'}, 'rateLimit': 2000})
         self.trk = Tracker(self.TT, self.CH, self.ex)
         self.trade = None; self.losses = 0; self.dloss = 0.0; self.date = None; self.rtime = datetime.datetime.now()
         self.LEVERAGE = 10 
-        self.send("✨ *بوت العقود الآجلة (Long/Short) بدأ على السيرفر!*")
+        
+        self.send("🔄 جاري التحقق من الصفقات المفتوحة...")
+        self.trade = self.load_state_from_exchange() # 🧠 ذاكرة السيرفر
+        
+        msg = "✨ *بوت الوحش V4 (Long/Short + ميزات مجنونة)*\n"
+        msg += "📋 المخاطرة: 8% | الرافعة: 10X"
+        self.send(msg)
         print("جاري تحميل أسواق العقود...")
         self.ex.load_markets(); print("✅ تم التحميل!")
+        if self.trade: self.send(f"🧠 *تم استئناف صفقة: {self.trade['d']} {self.trade['s']}*")
 
     def send(self, m): self.trk.send(m)
     def retry(self, fn, *a, **k):
         for i in range(5):
             try:
                 r = getattr(self.ex, fn)(*a, **k)
-                return r if r is not None or fn in ['fetch_trades'] else None
+                return r if r is not None else None
             except Exception as e:
                 print(f"Err {fn}: {e}"); time.sleep(5 * (i + 1))
         return None
@@ -47,15 +54,28 @@ class FuturesBot:
     def bal(self): return self.retry('fetch_balance')
     def ticks(self): return self.retry('fetch_tickers')
     
-    def setup_futures(self, s, dir):
+    def setup_futures(self, s, d):
         try: self.ex.set_leverage(self.LEVERAGE, s, params={'marginMode': 'isolated'})
-        except: pass
-        try: self.ex.set_margin_mode('isolated', s)
         except: pass
 
     def order(self, t, s, q):
         o = self.retry(f'create_market_{t}_order', s, q)
         return o if o and o.get('id') else None
+
+    # 🧠 ذاكرة الاستضافة السحابية
+    def load_state_from_exchange(self):
+        try:
+            positions = self.retry('fetch_positions')
+            if positions:
+                for pos in positions:
+                    qty = float(pos.get('position', pos.get('contracts', 0)))
+                    if qty > 0:
+                        sym = pos['symbol']; entry = float(pos['entryPrice'])
+                        side = pos.get('side', 'long').lower()
+                        d = 'short' if 'short' in side else 'long'
+                        return {'s': sym, 'd': d, 'e': entry, 'sl': entry*(0.97 if d=='long' else 1.03), 'isl': entry*(0.97 if d=='long' else 1.03), 'hp': entry, 'lp': entry, 'time': time.time(), 'q': qty, 'pyramided': True, 'partial_closed': True}
+        except Exception as e: print(f"Err load state: {e}")
+        return None
 
     def get_btc_rsi(self):
         b = self.ohlcv('BTC/USDT:USDT', '15m', 15)
@@ -85,11 +105,18 @@ class FuturesBot:
         if tf == '15m':
             if l['atr'] is None: return False, 0, 0, 0, 0
             vs = l['v'] > (l['vm'] * 1.5)
+            # 🦈 Liquidity Grab (ذيل الشمعة)
+            prev_body = abs(p['o'] - p['c'])
+            
             if reg == "uptrend":
-                cond = l['c'] > l['e2'] and (p['c'] < p['bbl']) and (l['c'] > l['bbl']) and 35 < l['rsi'] < 55 and l['macd'] > p['macd'] and vs
+                prev_wick_low = min(p['o'], p['c']) - p['l']
+                is_grab = (prev_wick_low > prev_body * 1.5) and (p['l'] < p['bbl'])
+                cond = l['c'] > l['e2'] and is_grab and (l['c'] > l['bbl']) and 35 < l['rsi'] < 55 and l['macd'] > p['macd'] and vs and (l['c'] > l['o'])
                 if cond: return True, l['c'], l['rsi'], l['bbl'], l['bbh']
             elif reg == "downtrend":
-                cond = l['c'] < l['e2'] and (p['c'] > p['bbh']) and (l['c'] < l['bbh']) and 45 < l['rsi'] < 65 and l['macd'] < p['macd'] and vs
+                prev_wick_high = p['h'] - max(p['o'], p['c'])
+                is_grab = (prev_wick_high > prev_body * 1.5) and (p['h'] > p['bbh'])
+                cond = l['c'] < l['e2'] and is_grab and (l['c'] < l['bbh']) and 45 < l['rsi'] < 65 and l['macd'] < p['macd'] and vs and (l['c'] < l['o'])
                 if cond: return True, l['c'], l['rsi'], l['bbl'], l['bbh']
         return False, 0, 0, 0, 0
 
@@ -101,10 +128,13 @@ class FuturesBot:
         df = pd.DataFrame(bars, columns=['t','o','h','l','c','v'])
         atr = ta.volatility.AverageTrueRange(high=df['h'], low=df['l'], close=df['c'], window=14).average_true_range().iloc[-1]
         if pd.isna(atr) or atr <= 0: return 0
-        risk = b * (0.75 if self.losses >= 3 else 1.5) / 100
+        
+        # ✅ تصحيح المخاطرة 8% والمعادلة
+        risk = b * (0.75 if self.losses >= 3 else 8.0) / 100
         sl_dist = 2.5 * atr
         if sl_dist <= 0: return 0
-        qty = (risk * self.LEVERAGE) / sl_dist
+        qty = risk / sl_dist # الحساب الدقيق
+        
         try:
             m = self.ex.market(s); fq = self.ex.amount_to_precision(s, qty)
             mn = m.get('limits', {}).get('amount', {}).get('min')
@@ -112,13 +142,26 @@ class FuturesBot:
         except: fq = self.ex.amount_to_precision(s, qty)
         return float(fq) if float(fq) > 0 else 0
 
-    def close(self, reason, pct, loss=False):
+    def close(self, reason, pct, loss=False, partial=False):
         if not self.trade: return
         s = self.trade['s']; d = self.trade['d']
-        q = self.trade['q'] 
-        t = self.tick(s); xp = self.trade['e'] if not t else t['last']
+        q = float(self.trade['q'])
+        if partial: q = q / 2.0
+        
         close_type = 'sell' if d == 'long' else 'buy'
-        if not self.order(close_type, s, q): self.send(f"🚨 فشل إغلاق {d} {s}"); return
+        fq = float(self.ex.amount_to_precision(s, q))
+        if fq <= 0: return
+        
+        t = self.tick(s); xp = self.trade['e'] if not t else t['last']
+        if not self.order(close_type, s, fq): self.send(f"🚨 فشل إغلاق {d} {s}"); return
+        
+        if partial:
+            self.trade['q'] = str(float(self.trade['q']) - fq)
+            self.trade['partial_closed'] = True
+            self.trade['sl'] = self.trade['e'] # تحريك الوقف للدخول
+            self.send(f"⚡ *إغلاق جزئي (50%)*\n🪙 {s} ({d})\n💰 secured: {pct:.2f}%\n🛑 SL للدخول")
+            return
+
         self.trk.add(s, d, self.trade['e'], xp, q, pct, reason)
         if loss:
             self.losses += 1; tb = float(self.bal().get('USDT', {}).get('free', 0))
@@ -129,17 +172,17 @@ class FuturesBot:
         self.trade = None
 
     def run(self):
-        self.send("🚀 *بوت العقود جاهز على السيرفر!*")
-        print("\n🚀 بدء حلقة العقود الآجلة...")
+        self.send("🚀 *الوحش V4 جاهز على السيرفر!*")
+        print("\n🚀 بدء حلقة العقود الآجلة (8% Risk, 10X Leverage)...")
         while True:
             if self.date != datetime.date.today(): self.dloss = 0.0; self.date = datetime.date.today()
             try:
-                if self.dloss >= 5.0: self.send("🛑 حد خسارة العقود اليومي 5%"); time.sleep(3600); continue
+                if self.dloss >= 20.0: self.send("🛑 حد خسارة يومي 20% (بسبب الرافعة)"); time.sleep(3600); continue
                 if not self.trade:
                     print("🔍 جاري فحص البيتكوين والعملات...")
                     btc_rsi = self.get_btc_rsi()
                     if btc_rsi < 40 or btc_rsi > 60: 
-                        print(f"⚠️ البيتكوين متطرف (RSI: {btc_rsi:.1f}). تجاهل."); time.sleep(60); continue
+                        print(f"⚠️ البيتكين متطرف (RSI: {btc_rsi:.1f}). تجاهل."); time.sleep(60); continue
                     tk = self.ticks()
                     if not tk: time.sleep(30); continue
                     syms = [s for s, i in tk.items() if s.endswith('/USDT:USDT') and i.get('quoteVolume') and i.get('last') and (i['quoteVolume']*i['last'] > 1000000)][:100]
@@ -160,7 +203,8 @@ class FuturesBot:
                                 atr = ta.volatility.AverageTrueRange(high=df['h'], low=df['l'], close=df['c'], window=14).average_true_range().iloc[-1]
                                 if direction == 'long': sl = p * (1 - 2.5 * atr / p) if not pd.isna(atr) else p * 0.975
                                 else: sl = p * (1 + 2.5 * atr / p) if not pd.isna(atr) else p * 1.025
-                                self.trade = {'s': s, 'd': direction, 'e': p, 'sl': sl, 'isl': sl, 'hp': p, 'lp': p, 'time': time.time(), 'q': q}
+                                
+                                self.trade = {'s': s, 'd': direction, 'e': p, 'sl': sl, 'isl': sl, 'hp': p, 'lp': p, 'time': time.time(), 'q': q, 'pyramided': False, 'partial_closed': False}
                                 emoji = "🟢LONG" if direction == 'long' else "🔴SHORT"
                                 self.send(f"{emoji} *عقد جديد*\n🪙 {s}\n💵 {p:.4f}\n⚖️ {q:.4f}\n🛑 SL: {sl:.4f}")
                                 print(f"\n🎯 تم فتح {emoji} على {s}!\n")
@@ -174,12 +218,40 @@ class FuturesBot:
                     if d == 'short' and cp < self.trade['lp']: self.trade['lp'] = cp
                     hpp = ((self.trade['hp'] - ep) / ep * 100) if d == 'long' else ((ep - self.trade['lp']) / ep * 100)
                     print(f"⏱️ {d} {s} | الربح: {pp:.2f}% | SL: {self.trade['sl']:.4f}     ", end='\r')
+                    
                     ssl = self.trade['sl']
                     if d == 'long' and cp <= ssl: self.close("🛑 SL Long", pp, True); continue
                     if d == 'short' and cp >= ssl: self.close("🛑 SL Short", pp, True); continue
+                    
+                    # 🦈 Volume Climax
+                    bars = self.ohlcv(s, '15m', 20)
+                    if bars:
+                        df = pd.DataFrame(bars, columns=['t','o','h','l','c','v'])
+                        vol_ma = df['v'].rolling(20).mean().iloc[-1]
+                        if df.iloc[-1]['v'] > (vol_ma * 4): self.close("🔥 انفجار فوليوم", pp, False); continue
+
+                    # ⏳ وقف زمني
                     if time.time() - self.trade['time'] > 3600 and abs(pp) < 1.0: self.close("⏳ انتهاء الوقت", pp, pp<0); continue
-                    if d == 'long' and pp >= 5.0: self.close("🏆 هدف Long", pp, False); continue
-                    if d == 'short' and pp >= 5.0: self.close("🏆 هدف Short", pp, False); continue
+                    
+                    # ⚡ الإغلاق الجزئي
+                    if pp >= 3.0 and not self.trade.get('partial_closed'):
+                        self.close("⚡ جزئي 50%", pp, partial=True); continue
+                    
+                    # 🚀 التعزيز
+                    if pp >= 2.0 and not self.trade.get('pyramided'):
+                        add_q = self.calc_qty(s, cp)
+                        if add_q > 0:
+                            o_type = 'buy' if d == 'long' else 'sell'
+                            if self.order(o_type, s, add_q):
+                                self.trade['pyramided'] = True
+                                self.trade['q'] = str(float(self.trade['q']) + add_q)
+                                self.send(f"🚀 *تعزيز!* {s}\nمضاعفة العقد: {self.trade['q']}")
+                                time.sleep(2); continue
+
+                    # 🎯 هدف نهائي 10%
+                    if pp >= 10.0: self.close("🎯 الهدف 10%", pp, False); continue
+                    
+                    # التريلينغ ستوب
                     if hpp >= 2.5:
                         if d == 'long':
                             nsl = self.trade['hp'] * (1 - 0.5 / 100)
@@ -187,6 +259,7 @@ class FuturesBot:
                         elif d == 'short':
                             nsl = self.trade['lp'] * (1 + 0.5 / 100)
                             if nsl < self.trade['sl']: self.trade['sl'] = nsl
+                            
             except Exception as e: print(f"\n⚠️ Err: {e}"); time.sleep(15)
             time.sleep(15)
             if (datetime.datetime.now() - self.rtime).total_seconds() >= 86400: self.trk.report(); self.rtime = datetime.datetime.now()
