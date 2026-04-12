@@ -4,6 +4,15 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 class SmartBot:
+    """
+    بوت الوحش V9.0 (النظام التطوري الديناميكي)
+    ==========================================
+    الميزات الجديدة:
+    1. Anti-Tilt: وقف ذكي بعد خسائر متتالية
+    2. Aggression Mode: استغلال عنيف للترندات القوية
+    3. Volatility Shift: تقليل الحجم في العواصف
+    """
+    
     def __init__(self):
         self.api_key = os.environ.get('API_KEY')
         self.api_secret = os.environ.get('API_SECRET')
@@ -25,20 +34,26 @@ class SmartBot:
         self.day = None
         self.day_trades = 0
         self.day_pnl = 0.0
-        self.cooldown = 0
         self.scan_num = 0
         self.report_time = time.time()
         self.last_scan_summary = time.time()
         
+        # ======= المتغيرات التطورية الجديدة =======
+        self.streak_wins = 0      # عدد الأرباح المتتالية
+        self.streak_losses = 0    # عدد الخسائر المتتالية
+        self.tilt_until = 0       # وقت نهاية وضع "الوقاية" (الإيقاف المؤقت)
+        self.is_aggressive = False # هل نحن في وضع "الاستغلال"؟
+        
         self.stats = {
             'wins': 0, 'losses': 0, 'timeouts': 0, 
-            'scanned': 0, 'no_score': 0, 'qty_zero': 0, 'order_fail': 0
+            'scanned': 0, 'no_score': 0, 'qty_zero': 0, 
+            'order_fail': 0, 'tilt_triggered': 0
         }
         
         self.CFG = {
             'max_daily': 10,
             'leverage': 10,
-            'risk_pct': 5.0,
+            'base_risk_pct': 5.0,   # المخاطرة الأساسية 5%
             'sl_mult': 1.5,
             'tp_mult': 2.5,
             'min_score': 4,
@@ -51,6 +66,12 @@ class SmartBot:
             'max_scan': 40,
             'loop_sec': 20,
             'summary_every': 1800,
+            # ======= إعدادات التطور =======
+            'tilt_after_losses': 2,      # إيقاف مؤقت بعد خسارتين متتاليتين
+            'tilt_duration_min': 60,     # مدة الإيقاف ساعة
+            'aggression_after_wins': 3,  # تفعيل الاستغلال بعد 3 أرباح متتالية
+            'aggression_risk_boost': 2.0,# زيادة المخاطرة بـ 2% في وضع الاستغلال
+            'vol_multiplier_danger': 2.0,# إذا كان التقلب ضعف المتوسط = خطر
         }
         
         self.tg("🔄 جاري الفحص...")
@@ -58,9 +79,12 @@ class SmartBot:
         self.exchange.load_markets()
         
         bal = self._balance()
-        msg  = "🤖 *بوت الوحش V8.4 (Hedge Mode Fix)*\n"
+        msg  = "🧠 *بوت الوحش V9.0 (التطوري)*\n"
         msg += "━━━━━━━━━━━━━━━━\n"
-        msg += "✅ دعم كامل لوضع التحوط\n"
+        msg += "🛡️ وقف ذكي (Anti-Tilt)\n"
+        msg += "⚡ وضع الاستغلال (Aggression)\n"
+        msg += "🌊 حماية من التقلبات (Volatility)\n"
+        msg += "━━━━━━━━━━━━━━━━\n"
         msg += f"💵 رصيد: {bal} USDT"
         self.tg(msg)
         
@@ -115,74 +139,46 @@ class SmartBot:
             return None
         return pd.DataFrame(data, columns=['t','o','h','l','c','v'])
     
-    # ================================================================
-    #       FIX: LEVERAGE & MARGIN (يدعم Hedge Mode)
-    # ================================================================
-    
     def _set_lev(self, sym, pos_side='LONG'):
-        """ضبط الرافعة - يجب تحديد pos_side في وضع Hedge"""
         try:
             self.exchange.set_leverage(
                 self.CFG['leverage'], sym, 
                 params={'marginMode': 'isolated', 'positionSide': pos_side}
             )
-            self.log(f"LEVERAGE {self.CFG['leverage']}X set for {sym} ({pos_side})")
         except Exception as e:
             self.log(f"LEVERAGE WARNING: {e}")
 
-    # ================================================================
-    #       FIX: ORDER EXECUTION (يدعم Hedge Mode)
-    # ================================================================
-    
     def _order(self, side, sym, qty, pos_side=None):
-        """تنفيذ الأمر مع تحديد PositionSide لوضع Hedge"""
         fn = f'create_market_{side}_order'
         params = {}
-        
-        # هذا هو السطر السحري الذي يحل مشكلة (code: 109400)
         if pos_side:
             params['positionSide'] = pos_side
             
-        self.log(f"ORDER ATTEMPT: {fn} | {sym} | QTY: {self.fmt(qty, 4)} | POS: {pos_side or 'Default'}")
-        
         try:
             o = getattr(self.exchange, fn)(sym, qty, params=params)
-            
             if o and o.get('id'):
-                self.log(f"ORDER SUCCESS: ID={o['id']}", notify=True, msg_ar=f"✅ تم تنفيذ الأمر: {o['id']}")
+                self.log(f"ORDER SUCCESS: ID={o['id']}", notify=True, msg_ar=f"✅ تنفيذ: {o['id']}")
                 return o
             else:
-                self.log(f"ORDER NO ID RESPONSE: {o}")
-                self.tg(f"⚠️ أمر بدون معرف: {o}")
+                self.log(f"ORDER NO ID: {o}")
                 
         except ccxt.errors.InsufficientFunds as e:
-            self.log(f"❌ ORDER FAILED: Insufficient Funds - {e}", notify=True, msg_ar=f"❌ رصيد غير كافي!")
+            self.log(f"ORDER FAILED: Insufficient Funds", notify=True, msg_ar=f"❌ رصيد غير كافي!")
             self.stats['order_fail'] += 1
             return None
-            
-        except ccxt.errors.InvalidOrder as e:
-            self.log(f"❌ ORDER FAILED: Invalid Order - {e}", notify=True, msg_ar=f"❌ أمر غير صالح: {e}")
-            self.stats['order_fail'] += 1
-            return None
-            
         except ccxt.errors.ExchangeError as e:
-            self.log(f"❌ ORDER FAILED: Exchange Error - {e}", notify=True, msg_ar=f"❌ خطأ المنصة: {e}")
+            self.log(f"ORDER FAILED: Exchange - {e}", notify=True, msg_ar=f"❌ خطأ منصة: {e}")
             self.stats['order_fail'] += 1
             return None
-            
         except ccxt.errors.NetworkError as e:
-            self.log(f"❌ ORDER FAILED: Network Error - {e}", notify=True, msg_ar=f"❌ خطأ شبكة: {e}")
+            self.log(f"ORDER FAILED: Network - {e}", notify=True, msg_ar=f"❌ خطأ شبكة: {e}")
             time.sleep(5)
             try:
                 o = getattr(self.exchange, fn)(sym, qty, params=params)
-                if o and o.get('id'):
-                    self.log(f"ORDER RETRY SUCCESS: ID={o['id']}", notify=True, msg_ar=f"✅ نجح بعد إعادة المحاولة: {o['id']}")
-                    return o
-            except Exception as e2:
-                self.log(f"❌ ORDER RETRY FAILED: {e2}")
-                
+                if o and o.get('id'): return o
+            except: pass
         except Exception as e:
-            self.log(f"❌ ORDER UNKNOWN ERROR: {type(e).__name__} - {e}", notify=True, msg_ar=f"❌ خطأ غير معروف: {e}")
+            self.log(f"ORDER FAILED: {e}", notify=True, msg_ar=f"❌ خطأ: {e}")
             self.stats['order_fail'] += 1
             return None
         
@@ -198,14 +194,9 @@ class SmartBot:
                     if qty > 0:
                         sym = p['symbol']
                         entry = float(p['entryPrice'])
-                        # في وضع Hedge، المنصة ترجع positionSide بشكل صريح
                         pos_side = p.get('positionSide', '').lower()
-                        if pos_side == 'short':
-                            d = 'short'
-                        else:
-                            d = 'long'
-                            
-                        self.log(f"RESUMING TRADE: {d} {sym}", notify=True, msg_ar=f"🔄 استئناف صفقة: {d} {sym}")
+                        d = 'short' if pos_side == 'short' else 'long'
+                        self.log(f"RESUMING: {d} {sym}", notify=True, msg_ar=f"🔄 استئناف: {d} {sym}")
                         return {
                             'sym': sym, 'dir': d, 'entry': entry,
                             'qty': qty, 'time': time.time(),
@@ -213,9 +204,80 @@ class SmartBot:
                             'sl': entry * (0.97 if d == 'long' else 1.03), 'tp': 0
                         }
         except Exception as e:
-            self.log(f"LOAD POSITION ERROR: {e}")
+            self.log(f"LOAD POS ERROR: {e}")
         return None
-    
+
+    # ================================================================
+    #               🧠 النظام التطوري (الذكاء الديناميكي)
+    # ================================================================
+
+    def _evolve_after_close(self, is_win):
+        """
+        هذه الدالة هي قلب النظام التطوري.
+        تُستدعى فور إغلاق أي صفقة لتعديل سلوك البوت.
+        """
+        if is_win:
+            self.streak_wins += 1
+            self.streak_losses = 0
+            
+            # 🚀 تفعيل وضع الاستغلال (Aggression Mode)
+            if self.streak_wins >= self.CFG['aggression_after_wins'] and not self.is_aggressive:
+                self.is_aggressive = True
+                msg = f"⚡ *وضع الاستغلال مفعّل!*\n"
+                msg += f"📊 {self.streak_wins} أرباح متتالية\n"
+                msg += f"📈 تم رفع المخاطرة إلى {self.CFG['base_risk_pct'] + self.CFG['aggression_risk_boost']}%"
+                self.tg(msg)
+        else:
+            self.streak_losses += 1
+            self.streak_wins = 0
+            
+            # إلغاء الاستغلال فور الخسارة
+            if self.is_aggressive:
+                self.is_aggressive = False
+                self.log("AGGRESSION MODE OFF", notify=True, msg_ar="🛑 تم إلغاء وضع الاستغلال")
+            
+            # 🛡️ تفعيل الوقاية (Anti-Tilt)
+            if self.streak_losses >= self.CFG['tilt_after_losses']:
+                self.tilt_until = time.time() + (self.CFG['tilt_duration_min'] * 60)
+                self.stats['tilt_triggered'] += 1
+                msg = f"🛡️ *وضع الوقاية مفعّل (Anti-Tilt)*\n"
+                msg += f"❌ {self.streak_losses} خسائر متتالية\n"
+                msg += f"⏸️ إيقاف تام لمدة {self.CFG['tilt_duration_min']} دقيقة\n"
+                msg += f"💡 السوق غير واضح أو متقلب، الانتظار أكثر أماناً."
+                self.tg(msg)
+
+    def _get_dynamic_risk(self, sym, atr):
+        """
+        حساب المخاطرة ديناميكياً حسب:
+        1. الوضع الأساسي / وضع الاستغلال
+        2. التقلبات الحالية للسوق (Volatility)
+        """
+        risk = self.CFG['base_risk_pct']
+        
+        # 1. زيادة المخاطرة إذا كنا في وضع الاستغلال
+        if self.is_aggressive:
+            risk += self.CFG['aggression_risk_boost']
+        
+        # 2. فحص التقلبات (هل السوق في عاصفة؟)
+        try:
+            df = self._df(sym, '1h', 50)
+            if df is not None:
+                atr_series = ta.volatility.AverageTrueRange(df['h'], df['l'], df['c'], 14).average_true_range()
+                cur_atr = atr_series.iloc[-1]
+                avg_atr = atr_series.iloc[-20:].mean() # متوسط آخر 20 ساعة
+                
+                if not pd.isna(cur_atr) and not pd.isna(avg_atr) and avg_atr > 0:
+                    vol_ratio = cur_atr / avg_atr
+                    
+                    # إذا التقلب ضعف المتوسط -> خطر انزلاق عالي -> قلل المخاطرة بنسبة 40%
+                    if vol_ratio >= self.CFG['vol_multiplier_danger']:
+                        risk *= 0.6
+                        self.log(f"VOLATILITY ALERT: {vol_ratio:.1f}x Avg. Risk reduced to {risk:.1f}%")
+        except Exception as e:
+            pass # لا نوقف البوت بسبب خطأ في حساب التقلب
+            
+        return risk
+
     # ================================================================
     #                        CALCULATIONS
     # ================================================================
@@ -229,7 +291,9 @@ class SmartBot:
         sl_dist = self.CFG['sl_mult'] * atr
         if sl_dist <= 0: return 0
         
-        risk_amount = bal * (self.CFG['risk_pct'] / 100)
+        # استخدام المخاطرة الديناميكية بدل الثابتة
+        risk_pct = self._get_dynamic_risk(sym, atr)
+        risk_amount = bal * (risk_pct / 100)
         qty = risk_amount / sl_dist
         
         try:
@@ -237,10 +301,7 @@ class SmartBot:
             fq = self.exchange.amount_to_precision(sym, qty)
             mn = market.get('limits', {}).get('amount', {}).get('min')
             
-            self.log(f"QTY CALC: raw={self.fmt(qty, 4)} | formatted={fq} | min={mn}")
-            
             if mn and float(fq) < float(mn):
-                self.log(f"QTY TOO SMALL, bumping to min*1.1")
                 fq = self.exchange.amount_to_precision(sym, float(mn) * 1.1)
             
             result = float(fq)
@@ -345,7 +406,7 @@ class SmartBot:
         return None, 0, 0, "No Break"
     
     # ================================================================
-    #                     TRADE MANAGEMENT (Hedge Mode)
+    #                     TRADE MANAGEMENT
     # ================================================================
     
     def _open(self, direction, sym, price, atr, strategy, reason):
@@ -357,18 +418,14 @@ class SmartBot:
         qty = self._calc_qty(sym, price, atr)
         if qty <= 0:
             self.stats['qty_zero'] += 1
-            self.log(f"QTY = 0 for {sym}")
             return False
         
-        # تحديد الأطراف بدقة لوضع Hedge
         side = 'buy' if direction == 'long' else 'sell'
         pos_side = 'LONG' if direction == 'long' else 'SHORT'
         
-        # ضبط الرافعة مع تحديد الطرف
         self._set_lev(sym, pos_side)
         time.sleep(1)
         
-        # إرسال الأمر مع تحديد الطرف
         order = self._order(side, sym, qty, pos_side=pos_side)
         
         if order:
@@ -381,6 +438,7 @@ class SmartBot:
             
             self.day_trades += 1
             icon = "🟢" if direction == 'long' else "🔴"
+            mode = "⚡AGGRESSIVE" if self.is_aggressive else "🛡️NORMAL"
             
             msg  = f"{icon} *صفقة #{self.day_trades}*\n"
             msg += "━━━━━━━━━━━━━━━━\n"
@@ -391,12 +449,12 @@ class SmartBot:
             msg += f"🛑 SL: {self.fmt(sl)}\n"
             msg += f"🎯 TP: {self.fmt(tp)}\n"
             msg += f"📝 {reason}\n"
+            msg += f"🧠 الوضع: {mode}\n"
             msg += f"🆔 {order.get('id', '?')}"
             self.tg(msg)
             return True
         
         # محاولة إنقاذ بالحد الأدنى
-        self.log("RETRYING WITH MIN QTY...")
         try:
             market = self.exchange.market(sym)
             mn = float(market.get('limits', {}).get('amount', {}).get('min', 0))
@@ -430,7 +488,6 @@ class SmartBot:
             t['partial'] = True
             t['sl'] = t['entry']
         
-        # تحديد الأطراف بدقة لوضع Hedge (عكس الفتح)
         close_side = 'sell' if d == 'long' else 'buy'
         pos_side = 'LONG' if d == 'long' else 'SHORT'
         
@@ -441,7 +498,6 @@ class SmartBot:
         
         if fq <= 0: return
         
-        # إرسال أمر الإغلاق مع تحديد الطرف
         order = self._order(close_side, sym, fq, pos_side=pos_side)
         if not order:
             self.tg(f"🚨 فشل إغلاق {d} {sym}")
@@ -450,14 +506,6 @@ class SmartBot:
         oid = order.get('id', '?')
         is_loss = pct < 0
         self.day_pnl += pct
-        
-        if is_loss:
-            self.stats['losses'] += 1
-            self.cooldown = time.time() + self.CFG['cooldown_sec']
-            icon = "📉"
-        else:
-            self.stats['wins'] += 1
-            icon = "🏆"
         
         if partial:
             msg  = "⚡ *إغلاق جزئي 50%*\n"
@@ -468,6 +516,16 @@ class SmartBot:
             self.tg(msg)
             return
         
+        # 🧠 استدعاء النظام التطوري بعد الإغلاق الكامل
+        self._evolve_after_close(not is_loss)
+        
+        if is_loss:
+            self.stats['losses'] += 1
+            icon = "📉"
+        else:
+            self.stats['wins'] += 1
+            icon = "🏆"
+        
         msg  = f"{icon} *إغلاق صفقة*\n"
         msg += "━━━━━━━━━━━━━━━━\n"
         msg += f"🪙 {sym} ({d})\n"
@@ -475,6 +533,7 @@ class SmartBot:
         msg += f"📝 السبب: {reason}\n"
         msg += "━━━━━━━━━━━━━━━━\n"
         msg += f"📊 اليوم: {self.day_trades}/{self.CFG['max_daily']} | صافي: {self.day_pnl:+.2f}%\n"
+        msg += f"🧠 سلسلة: W{self.streak_wins} / L{self.streak_losses}\n"
         msg += f"🆔 {oid}"
         self.tg(msg)
         self.active_trade = None
@@ -531,19 +590,23 @@ class SmartBot:
     def _report(self):
         total = self.stats['wins'] + self.stats['losses']
         wr = (self.stats['wins'] / total * 100) if total > 0 else 0
-        msg  = "📊 *تقرير يومي - الوحش V8.4*\n"
+        msg  = "🧠 *تقرير النظام التطوري V9.0*\n"
         msg += "━━━━━━━━━━━━━━━━\n"
         msg += f"📋 الصفقات: {self.day_trades}/{self.CFG['max_daily']}\n"
         msg += f"✅ أرباح: {self.stats['wins']}\n"
         msg += f"❌ خسائر: {self.stats['losses']}\n"
         msg += f"📈 نسبة فوز: {wr:.1f}%\n"
-        msg += f"💰 صافي: {self.day_pnl:+.2f}%"
+        msg += f"💰 صافي: {self.day_pnl:+.2f}%\n"
+        msg += "━━━━━━━━━━━━━━━━\n"
+        msg += f"🛡️ مرات الوقاية: {self.stats['tilt_triggered']}\n"
+        msg += f"📊 اتجاه مرفوض: {self.stats['no_score']}"
         self.tg(msg)
     
     def _summary(self):
         msg  = f"📊 *ملخص - {self.day_trades}/{self.CFG['max_daily']}*\n"
         msg += f"💰 صافي: {self.day_pnl:+.2f}%\n"
-        msg += f"✅{self.stats['wins']} ❌{self.stats['losses']} | رفض: {self.stats['no_score']}"
+        mode = "⚡ استغلال" if self.is_aggressive else "🛡️ عادي"
+        msg += f"🧠 الوضع: {mode} | W{self.streak_wins} L{self.streak_losses}"
         self.tg(msg)
     
     # ================================================================
@@ -551,8 +614,8 @@ class SmartBot:
     # ================================================================
     
     def run(self):
-        self.tg("🚀 *الوحش V8.4 يعمل!*")
-        self.log("BOT V8.4 (HEDGE MODE) STARTED", notify=True, msg_ar="🚀 تم بدء البوت بدعم وضع التحوط!")
+        self.tg("🧠 *الوحش V9.0 (التطوير الذاتي) يعمل!*")
+        self.log("BOT V9.0 EVOLUTIONARY STARTED", notify=True, msg_ar="🚀 تم بدء النظام التطوري!")
         
         while True:
             try:
@@ -564,18 +627,23 @@ class SmartBot:
                     self.day_trades = 0
                     self.day_pnl = 0.0
                     self.stats = {k: 0 for k in self.stats}
-                    self.cooldown = 0
-                    self.log("NEW DAY RESET", notify=True, msg_ar="📅 يوم جديد!")
+                    # إعادة ضبط الحالة الذهنية للبوت يومياً
+                    self.streak_wins = 0
+                    self.streak_losses = 0
+                    self.tilt_until = 0
+                    self.is_aggressive = False
+                    self.log("NEW DAY RESET", notify=True, msg_ar="📅 يوم جديد - إعادة ضبط العقل!")
                 
                 if self.day_trades >= self.CFG['max_daily']:
                     self.log(f"DAILY LIMIT ({self.CFG['max_daily']})")
                     time.sleep(600)
                     continue
                 
-                if time.time() < self.cooldown:
-                    wait = int(self.cooldown - time.time())
-                    self.log(f"COOLDOWN: {wait}s")
-                    time.sleep(30)
+                # 🛡️ فحص وضع الوقاية (Anti-Tilt)
+                if time.time() < self.tilt_until:
+                    wait = int((self.tilt_until - time.time()) / 60)
+                    self.log(f"🛡️ ANTI-TILT ACTIVE: {wait} min left")
+                    time.sleep(60)
                     continue
                 
                 if self.active_trade:
