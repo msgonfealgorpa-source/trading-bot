@@ -58,9 +58,9 @@ class SmartBot:
         self.exchange.load_markets()
         
         bal = self._balance()
-        msg  = "🤖 *بوت الوحش V8.3 (تشخيص أوامر)*\n"
+        msg  = "🤖 *بوت الوحش V8.4 (Hedge Mode Fix)*\n"
         msg += "━━━━━━━━━━━━━━━━\n"
-        msg += "🔧 تصحيح أخطاء التنفيذ\n"
+        msg += "✅ دعم كامل لوضع التحوط\n"
         msg += f"💵 رصيد: {bal} USDT"
         self.tg(msg)
         
@@ -116,71 +116,52 @@ class SmartBot:
         return pd.DataFrame(data, columns=['t','o','h','l','c','v'])
     
     # ================================================================
-    #       FIX: LEVERAGE & MARGIN (السبب الأول لفشل الأوامر)
+    #       FIX: LEVERAGE & MARGIN (يدعم Hedge Mode)
     # ================================================================
     
-    def _set_lev(self, sym):
-        """ضبط الرافعة والهامش بأمان تام - يعالج 90% من مشاكل التنفيذ"""
+    def _set_lev(self, sym, pos_side='LONG'):
+        """ضبط الرافعة - يجب تحديد pos_side في وضع Hedge"""
         try:
-            # 1. ضبط نوع الهامش أولاً (مهم جداً في BingX)
-            try:
-                self.exchange.set_margin_mode('isolated', sym)
-                self.log(f"MARGIN MODE set to isolated for {sym}")
-            except ccxt.errors.BadSymbol as e:
-                self.log(f"MARGIN MODE WARNING (BadSymbol): {e}")
-            except ccxt.errors.ExchangeError as e:
-                self.log(f"MARGIN MODE WARNING: {e}")
-            except Exception as e:
-                self.log(f"MARGIN MODE ERROR: {e}")
-            
-            # 2. ضبط الرافعة
-            try:
-                self.exchange.set_leverage(self.CFG['leverage'], sym, params={'marginMode': 'isolated'})
-                self.log(f"LEVERAGE set to {self.CFG['leverage']}X for {sym}")
-            except ccxt.errors.BadRequest as e:
-                self.log(f"LEVERAGE BAD REQUEST: {e}")
-            except Exception as e:
-                self.log(f"LEVERAGE ERROR: {e}")
-                
+            self.exchange.set_leverage(
+                self.CFG['leverage'], sym, 
+                params={'marginMode': 'isolated', 'positionSide': pos_side}
+            )
+            self.log(f"LEVERAGE {self.CFG['leverage']}X set for {sym} ({pos_side})")
         except Exception as e:
-            self.log(f"SET LEV FATAL ERROR: {e}")
+            self.log(f"LEVERAGE WARNING: {e}")
 
     # ================================================================
-    #       FIX: ORDER EXECUTION (يطبع الخطأ الحقيقي من المنصة)
+    #       FIX: ORDER EXECUTION (يدعم Hedge Mode)
     # ================================================================
     
-    def _order(self, side, sym, qty):
-        """تنفيذ الأمر - لا يخفي أي خطأ من المنصة"""
+    def _order(self, side, sym, qty, pos_side=None):
+        """تنفيذ الأمر مع تحديد PositionSide لوضع Hedge"""
         fn = f'create_market_{side}_order'
+        params = {}
         
-        # طباعة تفاصيل الأمر قبل التنفيذ
-        self.log(f"ORDER ATTEMPT: {fn} | {sym} | QTY: {self.fmt(qty, 4)}")
-        
-        # محاولة التنفيذ المباشر (بدون الـ retry المخفي)
-        try:
-            o = getattr(self.exchange, fn)(sym, qty)
+        # هذا هو السطر السحري الذي يحل مشكلة (code: 109400)
+        if pos_side:
+            params['positionSide'] = pos_side
             
-            # التحقق من الاستجابة
+        self.log(f"ORDER ATTEMPT: {fn} | {sym} | QTY: {self.fmt(qty, 4)} | POS: {pos_side or 'Default'}")
+        
+        try:
+            o = getattr(self.exchange, fn)(sym, qty, params=params)
+            
             if o and o.get('id'):
                 self.log(f"ORDER SUCCESS: ID={o['id']}", notify=True, msg_ar=f"✅ تم تنفيذ الأمر: {o['id']}")
                 return o
             else:
-                # المنصة استجابت لكن بدون ID (مثل رفض صامت)
                 self.log(f"ORDER NO ID RESPONSE: {o}")
                 self.tg(f"⚠️ أمر بدون معرف: {o}")
                 
         except ccxt.errors.InsufficientFunds as e:
-            self.log(f"❌ ORDER FAILED: Insufficient Funds - {e}", notify=True, msg_ar=f"❌ رصيد غير كافي لفتح الصفقة!")
+            self.log(f"❌ ORDER FAILED: Insufficient Funds - {e}", notify=True, msg_ar=f"❌ رصيد غير كافي!")
             self.stats['order_fail'] += 1
             return None
             
         except ccxt.errors.InvalidOrder as e:
             self.log(f"❌ ORDER FAILED: Invalid Order - {e}", notify=True, msg_ar=f"❌ أمر غير صالح: {e}")
-            self.stats['order_fail'] += 1
-            return None
-            
-        except ccxt.errors.BadSymbol as e:
-            self.log(f"❌ ORDER FAILED: Bad Symbol - {e}", notify=True, msg_ar=f"❌ رمز العملية خاطئ: {e}")
             self.stats['order_fail'] += 1
             return None
             
@@ -191,10 +172,9 @@ class SmartBot:
             
         except ccxt.errors.NetworkError as e:
             self.log(f"❌ ORDER FAILED: Network Error - {e}", notify=True, msg_ar=f"❌ خطأ شبكة: {e}")
-            # إعادة محاولة واحدة فقط للشبكة
             time.sleep(5)
             try:
-                o = getattr(self.exchange, fn)(sym, qty)
+                o = getattr(self.exchange, fn)(sym, qty, params=params)
                 if o and o.get('id'):
                     self.log(f"ORDER RETRY SUCCESS: ID={o['id']}", notify=True, msg_ar=f"✅ نجح بعد إعادة المحاولة: {o['id']}")
                     return o
@@ -218,8 +198,13 @@ class SmartBot:
                     if qty > 0:
                         sym = p['symbol']
                         entry = float(p['entryPrice'])
-                        side = p.get('side', 'long').lower()
-                        d = 'short' if 'short' in side else 'long'
+                        # في وضع Hedge، المنصة ترجع positionSide بشكل صريح
+                        pos_side = p.get('positionSide', '').lower()
+                        if pos_side == 'short':
+                            d = 'short'
+                        else:
+                            d = 'long'
+                            
                         self.log(f"RESUMING TRADE: {d} {sym}", notify=True, msg_ar=f"🔄 استئناف صفقة: {d} {sym}")
                         return {
                             'sym': sym, 'dir': d, 'entry': entry,
@@ -252,7 +237,6 @@ class SmartBot:
             fq = self.exchange.amount_to_precision(sym, qty)
             mn = market.get('limits', {}).get('amount', {}).get('min')
             
-            # طباعة تفاصيل الكمية للتشخيص
             self.log(f"QTY CALC: raw={self.fmt(qty, 4)} | formatted={fq} | min={mn}")
             
             if mn and float(fq) < float(mn):
@@ -361,7 +345,7 @@ class SmartBot:
         return None, 0, 0, "No Break"
     
     # ================================================================
-    #                     TRADE MANAGEMENT
+    #                     TRADE MANAGEMENT (Hedge Mode)
     # ================================================================
     
     def _open(self, direction, sym, price, atr, strategy, reason):
@@ -376,12 +360,16 @@ class SmartBot:
             self.log(f"QTY = 0 for {sym}")
             return False
         
-        # ضبط الرافعة أولاً (الخطوة الأهم)
-        self._set_lev(sym)
-        time.sleep(1)  # ثانية استراحة لضمان تطبيق الرافعة
-        
+        # تحديد الأطراف بدقة لوضع Hedge
         side = 'buy' if direction == 'long' else 'sell'
-        order = self._order(side, sym, qty)
+        pos_side = 'LONG' if direction == 'long' else 'SHORT'
+        
+        # ضبط الرافعة مع تحديد الطرف
+        self._set_lev(sym, pos_side)
+        time.sleep(1)
+        
+        # إرسال الأمر مع تحديد الطرف
+        order = self._order(side, sym, qty, pos_side=pos_side)
         
         if order:
             self.active_trade = {
@@ -407,15 +395,15 @@ class SmartBot:
             self.tg(msg)
             return True
         
-        # إذا فشل الأمر، نحاول مرة واحدة بكمية الحد الأدنى
+        # محاولة إنقاذ بالحد الأدنى
         self.log("RETRYING WITH MIN QTY...")
         try:
             market = self.exchange.market(sym)
             mn = float(market.get('limits', {}).get('amount', {}).get('min', 0))
             if mn > 0:
-                self._set_lev(sym)
+                self._set_lev(sym, pos_side)
                 time.sleep(1)
-                order2 = self._order(side, sym, mn * 1.1)
+                order2 = self._order(side, sym, mn * 1.1, pos_side=pos_side)
                 if order2:
                     self.active_trade = {
                         'sym': sym, 'dir': direction, 'entry': price,
@@ -442,7 +430,9 @@ class SmartBot:
             t['partial'] = True
             t['sl'] = t['entry']
         
+        # تحديد الأطراف بدقة لوضع Hedge (عكس الفتح)
         close_side = 'sell' if d == 'long' else 'buy'
+        pos_side = 'LONG' if d == 'long' else 'SHORT'
         
         try:
             fq = float(self.exchange.amount_to_precision(sym, qty))
@@ -451,7 +441,8 @@ class SmartBot:
         
         if fq <= 0: return
         
-        order = self._order(close_side, sym, fq)
+        # إرسال أمر الإغلاق مع تحديد الطرف
+        order = self._order(close_side, sym, fq, pos_side=pos_side)
         if not order:
             self.tg(f"🚨 فشل إغلاق {d} {sym}")
             return
@@ -540,7 +531,7 @@ class SmartBot:
     def _report(self):
         total = self.stats['wins'] + self.stats['losses']
         wr = (self.stats['wins'] / total * 100) if total > 0 else 0
-        msg  = "📊 *تقرير يومي - الوحش V8.3*\n"
+        msg  = "📊 *تقرير يومي - الوحش V8.4*\n"
         msg += "━━━━━━━━━━━━━━━━\n"
         msg += f"📋 الصفقات: {self.day_trades}/{self.CFG['max_daily']}\n"
         msg += f"✅ أرباح: {self.stats['wins']}\n"
@@ -560,8 +551,8 @@ class SmartBot:
     # ================================================================
     
     def run(self):
-        self.tg("🚀 *الوحش V8.3 يعمل!*")
-        self.log("BOT V8.3 STARTED", notify=True, msg_ar="🚀 تم بدء البوت!")
+        self.tg("🚀 *الوحش V8.4 يعمل!*")
+        self.log("BOT V8.4 (HEDGE MODE) STARTED", notify=True, msg_ar="🚀 تم بدء البوت بدعم وضع التحوط!")
         
         while True:
             try:
