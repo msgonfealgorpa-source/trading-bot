@@ -169,7 +169,7 @@ class FuturesBot:
         return None, 0, 0  
 
     def _get_ny_open_hour_utc(self):  
-        now = datetime.datetime.utcnow()  
+        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)  
         year = now.year  
         dst_start = datetime.datetime(year, 3, 14)  
         dst_end = datetime.datetime(year, 11, 7)  
@@ -179,7 +179,7 @@ class FuturesBot:
             return 14  
 
     def analyze_ny_breakout(self, s):  
-        now_utc = datetime.datetime.utcnow()  
+        now_utc = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)  
         ny_hour = self._get_ny_open_hour_utc()  
         ny_open_time = now_utc.replace(hour=ny_hour, minute=30, second=0, microsecond=0)  
           
@@ -370,7 +370,7 @@ class FuturesBot:
                     hpp = ((self.trade['hp'] - ep) / ep * 100) if d == 'long' else ((ep - self.trade['lp']) / ep * 100)  
                       
                     strat_name = self.trade.get('strategy', "")  
-                    print(f"⏱️ {d} {s} | {strat_name} | ربح: {pp:.2f}%     ", end='\r')  
+                    print(f"⏱️ {d} {s} | {strat_name} | ربح: {pp:.2f}%      ", end='\r')  
                       
                     ssl = self.trade['sl']  
                     if d == 'long' and cp <= ssl: self.close("🛑 SL Long", pp, True); continue  
