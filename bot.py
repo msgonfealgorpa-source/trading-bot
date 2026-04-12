@@ -300,7 +300,7 @@ class FuturesBot:
                 if not self.trade:  
                     print("🔍 جاري الفحص...", end='\r')  
                     btc_rsi = self.get_btc_rsi()  
-                    if btc_rsi < 40 or btc_rsi > 60:   
+                    if btc_rsi < 30 or btc_rsi > 70:   
                         print(f"⚠️ BTC متطرف (RSI: {btc_rsi:.1f}). تجاهل.", end='\r'); time.sleep(60); continue  
                       
                     tk = self.ticks()  
