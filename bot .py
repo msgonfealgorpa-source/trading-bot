@@ -5,92 +5,91 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 class SmartBot:
     """
-    بوت الوحش V13.0 (STABLE)
-    ==========================
-    - لا يوجد Realtime Scanner (سبب المشاكل)
-    - مزامنة حقيقية مع المنصة
-    - Trailing محسن
-    - كود بسيط ونظيف
+    بوت الوحش V14.0 (Rock Solid)
+    ===============================
+    ✅ RLock = لا deadlock أبداً
+    ✅ سعر دخول فعلي من المنصة
+    ✅ مزامنة آمنة (لا تمسح بيانات عند خطأ شبكة)
+    ✅ شموع مكتملة فقط
     """
-    
+
     def __init__(self):
         self.api_key = os.environ.get('API_KEY')
         self.api_secret = os.environ.get('API_SECRET')
         self.tg_token = os.environ.get('TELEGRAM_TOKEN')
         self.tg_chat = os.environ.get('CHAT_ID')
-        
+
         if not all([self.api_key, self.api_secret, self.tg_token]):
             print("[FATAL ERROR] Missing API Keys!")
             return
-        
+
         self.exchange = ccxt.bingx({
             'apiKey': self.api_key,
             'secret': self.api_secret,
             'enableRateLimit': True,
             'options': {'defaultType': 'swap'}
         })
-        
-        self.trade_lock = threading.Lock()
+
+        # ✅✅✅ RLock بدل Lock - هذا هو الحل الأساسي ✅✅✅
+        self.trade_lock = threading.RLock()
         self.trade_settings = None
         self.day = None
         self.day_trades = 0
         self.day_pnl = 0.0
         self.scan_num = 0
         self.last_summary = time.time()
-        
+
         self.streak_wins = 0
         self.streak_losses = 0
         self.tilt_until = 0
         self.is_aggressive = False
-        
+
         self.stats = {
             'wins': 0, 'losses': 0, 'timeouts': 0,
             'scanned': 0, 'no_score': 0, 'qty_zero': 0,
             'order_fail': 0, 'tilt_triggered': 0,
-            'whale_spotted': 0, 'trail_adjustments': 0,
-            'sync_fixes': 0
+            'whale_spotted': 0, 'trail_adj': 0, 'sync_fix': 0
         }
-        
+
         self.CFG = {
-            'max_daily': 5,          # ✅ قللنا العدد للحماية
+            'max_daily': 5,
             'leverage': 10,
-            'base_risk_pct': 3.0,    # ✅ قللنا المخاطرة من 5 لـ 3
-            'sl_mult': 2.0,          # ✅ وقف أوسع 2.0 بدل 1.5
-            'tp_mult': 3.0,          # ✅ هدف أوسع 3.0 بدل 2.5
-            'min_score': 5,          # ✅ اشتراط أعلى 5 بدل 4
-            'score_gap': 3,          # ✅ فاصل أكبر 3 بدل 2
-            'partial_at': 2.0,       # ✅ خروج جزئي بعد 2%
-            'trail_after': 2.0,      # ✅ تتبع بعد 2%
-            'trail_step': 0.2,       # ✅ خطوة تتبع 0.2%
-            'trail_min_move': 0.6,   # ✅ أقل تراجع لتعديل SL
-            'max_hold_min': 90,      # ✅ مدة أقصر
-            'vol_filter': 1000000,   # ✅ فلتر حجم أعلى
-            'max_scan': 25,          # ✅ فحص أقل
-            'loop_sec': 15,          # ✅ فحص كل 15 ثانية
+            'base_risk_pct': 3.0,
+            'sl_mult': 2.0,
+            'tp_mult': 3.0,
+            'min_score': 5,
+            'score_gap': 3,
+            'partial_at': 2.0,
+            'trail_after': 2.0,
+            'trail_step': 0.2,
+            'trail_min_move': 0.6,
+            'max_hold_min': 90,
+            'vol_filter': 1000000,
+            'max_scan': 25,
+            'loop_sec': 15,
             'summary_every': 1800,
             'tilt_after_losses': 2,
-            'tilt_duration_min': 30, # ✅ إيقاف أقصر
+            'tilt_duration_min': 30,
             'aggression_after_wins': 3,
-            'aggression_risk_boost': 1.0,  # ✅ boost أقل
+            'aggression_risk_boost': 1.0,
             'whale_level_2': 3.0,
             'whale_level_3': 5.0,
         }
-        
+
         self.tg("🔄 جاري التشغيل...")
         self.exchange.load_markets()
         self._force_sync()
-        
+
         bal = self._balance()
-        msg = "🐋 *بوت الوحش V13.0 (STABLE)*\n"
+        msg = "🐋 *بوت الوحش V14.0 (Rock Solid)*\n"
         msg += "━━━━━━━━━━━━━━━━\n"
-        msg += "🛡️ نسخة مستقرة ومحافظة\n"
-        msg += "🔗 مزامنة حقيقية مع المنصة\n"
-        msg += "🐢 Trailing بطيء ومحسن\n"
-        msg += "📏 شموع مكتملة فقط\n"
+        msg += "🔒 RLock (لا deadlock)\n"
+        msg += "🔗 مزامنة آمنة\n"
+        msg += "💵 سعر دخول فعلي\n"
         msg += "━━━━━━━━━━━━━━━━\n"
         msg += f"💳 رصيد: {bal} USDT"
         self.tg(msg)
-        
+
         if self.trade_settings:
             ts = self.trade_settings
             self.tg(f"🧠 مراقبة: {ts['dir']} {ts['sym']}")
@@ -101,7 +100,8 @@ class SmartBot:
                 f"https://api.telegram.org/bot{self.tg_token}/sendMessage",
                 data={'chat_id': self.tg_chat, 'text': msg, 'parse_mode': 'Markdown'}
             )
-        except: pass
+        except:
+            pass
 
     def log(self, msg, notify=False, msg_ar=None):
         ts = datetime.datetime.now().strftime("%H:%M:%S")
@@ -113,14 +113,15 @@ class SmartBot:
         return f"{val:.{d}g}" if val else "0"
 
     # ================================================================
-    #                         API
+    #                              API
     # ================================================================
 
     def _api(self, method, *args, **kwargs):
         for i in range(3):
-            try: return getattr(self.exchange, method)(*args, **kwargs)
+            try:
+                return getattr(self.exchange, method)(*args, **kwargs)
             except Exception as e:
-                self.log(f"API Retry {method}: {str(e)[:50]}")
+                self.log(f"API[{i}] {method}: {str(e)[:60]}")
                 time.sleep(3 * (i + 1))
         return None
 
@@ -128,19 +129,29 @@ class SmartBot:
         b = self._api('fetch_balance', {'type': 'swap'})
         return float(b.get('USDT', {}).get('free', 0)) if b else 0
 
-    def _tickers(self): return self._api('fetch_tickers')
-    def _ticker(self, sym): return self._api('fetch_ticker', sym)
-    def _ohlcv(self, sym, tf, limit=60): return self._api('fetch_ohlcv', sym, tf, limit=limit)
+    def _tickers(self):
+        return self._api('fetch_tickers')
+
+    def _ticker(self, sym):
+        return self._api('fetch_ticker', sym)
+
+    def _ohlcv(self, sym, tf, limit=60):
+        return self._api('fetch_ohlcv', sym, tf, limit=limit)
 
     def _df(self, sym, tf, limit=60):
         data = self._ohlcv(sym, tf, limit)
-        if not data or len(data) < limit: return None
-        return pd.DataFrame(data, columns=['t','o','h','l','c','v'])
+        if not data or len(data) < limit:
+            return None
+        return pd.DataFrame(data, columns=['t', 'o', 'h', 'l', 'c', 'v'])
 
     def _set_lev(self, sym, pos_side='LONG'):
         try:
-            self.exchange.set_leverage(self.CFG['leverage'], sym, params={'marginMode': 'isolated', 'positionSide': pos_side})
-        except: pass
+            self.exchange.set_leverage(
+                self.CFG['leverage'], sym,
+                params={'marginMode': 'isolated', 'positionSide': pos_side}
+            )
+        except Exception as e:
+            self.log(f"LEV: {str(e)[:40]}")
 
     def _order(self, side, sym, qty, pos_side=None):
         fn = f'create_market_{side}_order'
@@ -148,24 +159,42 @@ class SmartBot:
         try:
             o = getattr(self.exchange, fn)(sym, qty, params=params)
             if o and o.get('id'):
-                self.log(f"ORDER OK: {o['id']}", notify=True, msg_ar=f"✅ تنفيذ: {o['id']}")
+                self.log(f"ORDER OK: {o['id']}")
                 return o
+            else:
+                self.log(f"ORDER NO ID")
         except ccxt.errors.InsufficientFunds:
-            self.log("ORDER FAIL: No Funds", notify=True, msg_ar="❌ رصيد غير كافي!")
+            self.log("ORDER: No Funds", notify=True, msg_ar="❌ رصيد غير كافي!")
+            self.stats['order_fail'] += 1
+        except ccxt.errors.InvalidOrder as e:
+            self.log(f"ORDER INVALID: {str(e)[:80]}", notify=True,
+                     msg_ar=f"❌ أمر غير صالح")
+            self.stats['order_fail'] += 1
+        except ccxt.errors.ExchangeError as e:
+            self.log(f"ORDER EXCH: {str(e)[:80]}", notify=True,
+                     msg_ar=f"❌ خطأ منصة")
             self.stats['order_fail'] += 1
         except Exception as e:
-            self.log(f"ORDER FAIL: {str(e)[:60]}")
+            self.log(f"ORDER ERR: {str(e)[:80]}")
             self.stats['order_fail'] += 1
         return None
 
     # ================================================================
-    #                    🔗 المزامنة الحقيقية
+    #              🔗 المزامنة (آمنة - لا ت丢失 بيانات)
     # ================================================================
 
     def _get_real_position(self):
+        """
+        ✅ يرجع 3 حالات:
+           dict   = وجد صفقة
+           None   = لا يوجد صفقة (تأكدنا)
+           'ERR'  = خطأ شبكة (لا نغير شيئاً!)
+        """
         try:
             positions = self._api('fetch_positions')
-            if not positions: return None
+            if positions is None:
+                return 'ERR'  # ✅ خطأ شبكة - لا نمسح شيئاً!
+
             for p in positions:
                 qty = float(p.get('position', p.get('contracts', 0)))
                 if qty > 0:
@@ -176,18 +205,31 @@ class SmartBot:
                         'qty': qty,
                         'pnl_pct': float(p.get('percentage', 0))
                     }
-            return None
-        except:
-            return None
+            return None  # ✅ تأكدنا: فارغ
+        except Exception as e:
+            self.log(f"POS ERR: {str(e)[:50]}")
+            return 'ERR'
 
     def _force_sync(self):
         real = self._get_real_position()
+
+        if real == 'ERR':
+            return  # ✅ خطأ شبكة - لا نلمس الإعدادات أبداً!
+
         with self.trade_lock:
             if real:
                 sym, d, entry = real['sym'], real['dir'], real['entry']
-                if self.trade_settings and (self.trade_settings['sym'] != sym or self.trade_settings['dir'] != d):
-                    self.tg(f"🚨 *تناقض وإصلاح!*\nكان: {self.trade_settings.get('dir','?')} {self.trade_settings.get('sym','?')}\nالحقيقة: {d} {sym}")
-                    self.stats['sync_fixes'] += 1
+
+                if self.trade_settings:
+                    if self.trade_settings['sym'] != sym or self.trade_settings['dir'] != d:
+                        self.tg(f"🚨 *تناقض!*\n"
+                                f"كان: {self.trade_settings.get('dir', '?')} "
+                                f"{self.trade_settings.get('sym', '?')}\n"
+                                f"الآن: {d} {sym}")
+                        self.stats['sync_fix'] += 1
+                    else:
+                        return  # ✅ مطابق - لا حاجة لتغيير
+
                 self.trade_settings = {
                     'sym': sym, 'dir': d, 'entry': entry, 'qty': real['qty'],
                     'sl': entry * (0.96 if d == 'long' else 1.04),
@@ -196,67 +238,66 @@ class SmartBot:
                 }
             else:
                 if self.trade_settings:
-                    self.log(f"SYNC: Cleared ghost {self.trade_settings['sym']}")
-                    self.stats['sync_fixes'] += 1
-                self.trade_settings = None
+                    self.log(f"SYNC: Cleared {self.trade_settings['sym']}")
+                    self.stats['sync_fix'] += 1
+                    self.trade_settings = None
 
     # ================================================================
-    #                       الحماية والمخاطرة
+    #                        المخاطرة
     # ================================================================
-
-    def _check_slippage(self, sym, signal_price):
-        ticker = self._ticker(sym)
-        if not ticker: return True
-        diff = abs(ticker['last'] - signal_price) / signal_price * 100
-        if diff > 0.5:
-            self.log(f"SLIPPAGE BLOCKED: {diff:.2f}%", notify=True, msg_ar=f"🚫 انزلاق {diff:.2f}%")
-            return False
-        return True
 
     def _evolve(self, is_win):
         if is_win:
-            self.streak_wins += 1; self.streak_losses = 0
+            self.streak_wins += 1
+            self.streak_losses = 0
             if self.streak_wins >= 3 and not self.is_aggressive:
                 self.is_aggressive = True
                 self.tg("⚡ وضع الاستغلال!")
         else:
-            self.streak_losses += 1; self.streak_wins = 0
-            if self.is_aggressive: self.is_aggressive = False
+            self.streak_losses += 1
+            self.streak_wins = 0
+            if self.is_aggressive:
+                self.is_aggressive = False
             if self.streak_losses >= 2:
                 self.tilt_until = time.time() + 1800
                 self.stats['tilt_triggered'] += 1
                 self.tg("🛡️ إيقاف 30 دقيقة")
 
-    def _calc_qty(self, sym, price, atr):
+    def _calc_qty(self, price, atr):
         bal = self._balance()
-        if bal <= 0: return 0
+        if bal <= 0:
+            return 0
         sl_dist = self.CFG['sl_mult'] * atr
-        if sl_dist <= 0: return 0
+        if sl_dist <= 0:
+            return 0
         risk = self.CFG['base_risk_pct']
-        if self.is_aggressive: risk += self.CFG['aggression_risk_boost']
-        qty = (bal * (risk / 100)) / sl_dist
-        try:
-            fq = self.exchange.amount_to_precision(sym, qty)
-            mn = self.exchange.market(sym).get('limits', {}).get('amount', {}).get('min')
-            if mn and float(fq) < float(mn): fq = self.exchange.amount_to_precision(sym, float(mn) * 1.1)
-            return float(fq) if float(fq) > 0 else 0
-        except: return 0
+        if self.is_aggressive:
+            risk += self.CFG['aggression_risk_boost']
+        return (bal * (risk / 100)) / sl_dist
 
-    def _pnl_pct(self, entry, current, direction):
-        return ((current - entry) / entry) * 100 if direction == 'long' else ((entry - current) / entry) * 100
+    def _precise_qty(self, sym, qty):
+        try:
+            fq = float(self.exchange.amount_to_precision(sym, qty))
+            mn = self.exchange.market(sym).get('limits', {}).get('amount', {}).get('min')
+            if mn and float(mn) > 0 and fq < float(mn):
+                fq = float(mn) * 1.01
+            return fq if fq > 0 else 0
+        except:
+            return 0
 
     # ================================================================
-    #              📊 نظام النقاط (شموع مكتملة فقط)
+    #                 📊 نظام النقاط (شموع مكتملة)
     # ================================================================
 
     def _score(self, sym):
         """
-        ✅ يفحص الشموع المكتملة فقط - لا يفحص الشمعة الحالية
-        ✅ هذا يمنع الإشارات الكاذبة
+        ✅ يرجع: (direction, atr, reason, is_whale)
+        ✅ بدون سعر! السعر يُؤخذ لاحقاً من التكر الحقيقي
         """
         df = self._df(sym, '15m', 60)
         df_h = self._df(sym, '1h', 50)
-        if df is None or df_h is None: return None, 0, 0, "No Data", False
+        if df is None or df_h is None:
+            return None, 0, "No Data", False
 
         df['ema9'] = ta.trend.ema_indicator(df['c'], 9)
         df['ema21'] = ta.trend.ema_indicator(df['c'], 21)
@@ -266,97 +307,122 @@ class SmartBot:
         df['macd'] = ta.trend.macd_diff(df['c'])
         df_h['ema50'] = ta.trend.ema_indicator(df_h['c'], 50)
 
-        # ✅ نستخدم الشمعة قبل الأخيرة (المكتملة) وليس الحالية
-        cur = df.iloc[-2]  # ← آخر شمعة مكتملة
+        # ✅ الشمعة المكتملة (قبل الأخيرة)
+        cur = df.iloc[-2]
         prev = df.iloc[-3]
         cur_h = df_h.iloc[-1]
         atr = cur['atr']
 
-        if pd.isna(atr) or atr <= 0: return None, 0, 0, "ATR N/A", False
+        if pd.isna(atr) or atr <= 0:
+            return None, 0, "ATR N/A", False
 
         L, S = 0, 0
         LR, SR = [], []
 
-        # 1. اتجاه الساعة (وزن 2)
+        # 1. اتجاه الساعة (2)
         if not pd.isna(cur_h['ema50']):
-            if cur_h['c'] > cur_h['ema50']: L += 2; LR.append("1H↑")
-            else: S += 2; SR.append("1H↓")
+            if cur_h['c'] > cur_h['ema50']:
+                L += 2; LR.append("1H↑")
+            else:
+                S += 2; SR.append("1H↓")
 
-        # 2. تقاطع EMA (وزن 2)
+        # 2. تقاطع EMA (2)
         ema_ok = all(not pd.isna(x) for x in [cur['ema9'], cur['ema21'], prev['ema9'], prev['ema21']])
         if ema_ok:
             if prev['ema9'] <= prev['ema21'] and cur['ema9'] > cur['ema21']:
-                L += 2; LR.append("CROSS↑")
+                L += 2; LR.append("X↑")
             elif prev['ema9'] >= prev['ema21'] and cur['ema9'] < cur['ema21']:
-                S += 2; SR.append("CROSS↓")
-            elif cur['ema9'] > cur['ema21']: L += 1
-            else: S += 1
+                S += 2; SR.append("X↓")
+            elif cur['ema9'] > cur['ema21']:
+                L += 1
+            else:
+                S += 1
 
-        # 3. RSI (وزن 2)
+        # 3. RSI (2)
         if not pd.isna(cur['rsi']):
-            if cur['rsi'] < 30: L += 2; LR.append(f"RSI{cur['rsi']:.0f}")
-            elif cur['rsi'] > 70: S += 2; SR.append(f"RSI{cur['rsi']:.0f}")
-            elif cur['rsi'] < 40: L += 1
-            elif cur['rsi'] > 60: S += 1
+            if cur['rsi'] < 30:
+                L += 2; LR.append(f"R{cur['rsi']:.0f}")
+            elif cur['rsi'] > 70:
+                S += 2; SR.append(f"R{cur['rsi']:.0f}")
+            elif cur['rsi'] < 40:
+                L += 1
+            elif cur['rsi'] > 60:
+                S += 1
 
-        # 4. MACD (وزن 1)
+        # 4. MACD (1)
         if not pd.isna(cur['macd']) and not pd.isna(prev['macd']):
-            if cur['macd'] > 0 and cur['macd'] > prev['macd']: L += 1
-            elif cur['macd'] < 0 and cur['macd'] < prev['macd']: S += 1
+            if cur['macd'] > 0 and cur['macd'] > prev['macd']:
+                L += 1
+            elif cur['macd'] < 0 and cur['macd'] < prev['macd']:
+                S += 1
 
-        # 5. شمعة قوية (وزن 1)
+        # 5. شمعة قوية (1)
         body = abs(cur['c'] - cur['o'])
         rng = cur['h'] - cur['l']
         if rng > 0 and (body / rng) > 0.6:
-            if cur['c'] > cur['o']: L += 1; LR.append("BULL🟢")
-            else: S += 1; SR.append("BEAR🔴")
+            if cur['c'] > cur['o']:
+                L += 1; LR.append("BULL")
+            else:
+                S += 1; SR.append("BEAR")
 
-        # 6. رادار الحيتان (وزن 2-4)
+        # 6. حيتان (2-4)
         is_whale = False
         if not pd.isna(cur['vm']) and cur['vm'] > 0:
-            vol_ratio = cur['v'] / cur['vm']
-            if vol_ratio >= 5.0:
+            vr = cur['v'] / cur['vm']
+            if vr >= 5.0:
                 is_whale = True
-                if cur['c'] > cur['o']: L += 4; LR.append(f"🐋{vol_ratio:.0f}x")
-                else: S += 4; SR.append(f"🐋{vol_ratio:.0f}x")
-            elif vol_ratio >= 3.0:
+                if cur['c'] > cur['o']:
+                    L += 4; LR.append(f"🐋{vr:.0f}x")
+                else:
+                    S += 4; SR.append(f"🐋{vr:.0f}x")
+            elif vr >= 3.0:
                 is_whale = True
-                if cur['c'] > cur['o']: L += 2; LR.append(f"🐋{vol_ratio:.0f}x")
-                else: S += 2; SR.append(f"🐋{vol_ratio:.0f}x")
+                if cur['c'] > cur['o']:
+                    L += 2; LR.append(f"🐋{vr:.0f}x")
+                else:
+                    S += 2; SR.append(f"🐋{vr:.0f}x")
 
-        if is_whale: self.stats['whale_spotted'] += 1
+        if is_whale:
+            self.stats['whale_spotted'] += 1
 
-        # ✅ اشتراطات صارمة
-        min_pts = self.CFG['min_score']
+        mp = self.CFG['min_score']
         gap = self.CFG['score_gap']
 
-        if L >= min_pts and (L - S) >= gap:
-            return 'long', cur['c'], atr, f"L:{L}-S:{S} " + "+".join(LR), is_whale
-        elif S >= min_pts and (S - L) >= gap:
-            return 'short', cur['c'], atr, f"L:{L}-S:{S} " + "+".join(SR), is_whale
+        if L >= mp and (L - S) >= gap:
+            return 'long', atr, f"L{L}-S{S} " + "+".join(LR), is_whale
+        if S >= mp and (S - L) >= gap:
+            return 'short', atr, f"L{L}-S{S} " + "+".join(SR), is_whale
 
         self.stats['no_score'] += 1
-        return None, 0, 0, f"L:{L}-S:{S}", False
+        return None, 0, f"L{L}-S{S}", False
 
     # ================================================================
-    #                   فتح وإغلاق الصفقات
+    #                     فتح وإغلاق
     # ================================================================
 
-    def _open(self, direction, sym, price, atr, reason, is_whale=False):
-        # ✅ تحقق: لا صفقة فعلية
-        if self._get_real_position():
-            self.log(f"BLOCKED: Position already exists")
+    def _open(self, direction, sym, atr, reason, is_whale=False):
+        # ✅ لا صفقة موجودة
+        real = self._get_real_position()
+        if real == 'ERR':
+            return False
+        if real:
+            self.log(f"BLOCKED: exists {real['sym']}")
             return False
 
-        if not self._check_slippage(sym, price): return False
+        # ✅ السعر الحالي الفعلي (ليس سعر شمعة قديمة!)
+        ticker = self._ticker(sym)
+        if not ticker or not ticker.get('last') or ticker['last'] <= 0:
+            return False
+        price = ticker['last']
 
-        sl_dist = self.CFG['sl_mult'] * atr
-        tp_dist = self.CFG['tp_mult'] * atr
-        sl = price - sl_dist if direction == 'long' else price + sl_dist
-        tp = price + tp_dist if direction == 'long' else price - tp_dist
+        # ✅ حساب SL/TP من السعر الحالي
+        sl = price - (self.CFG['sl_mult'] * atr) if direction == 'long' else price + (self.CFG['sl_mult'] * atr)
+        tp = price + (self.CFG['tp_mult'] * atr) if direction == 'long' else price - (self.CFG['tp_mult'] * atr)
 
-        qty = self._calc_qty(sym, price, atr)
-        if qty <= 0: self.stats['qty_zero'] += 1; return False
+        qty = self._precise_qty(sym, self._calc_qty(price, atr))
+        if qty <= 0:
+            self.stats['qty_zero'] += 1
+            return False
 
         side = 'buy' if direction == 'long' else 'sell'
         pos_side = 'LONG' if direction == 'long' else 'SHORT'
@@ -365,25 +431,36 @@ class SmartBot:
         time.sleep(0.5)
 
         order = self._order(side, sym, qty, pos_side=pos_side)
-        if not order: return False
+        if not order:
+            return False
 
-        # ✅ تحقق من المنصة
+        # ✅ تحقق من المنصة بعد ثانيتين
         time.sleep(2)
         real = self._get_real_position()
-        if not real:
+
+        if real == 'ERR':
+            # خطأ شبكة - نستخدم التقدير
+            real_entry, real_qty = price, qty
+        elif not real:
             self.tg(f"🚨 أمر وهمي! {sym}")
             self.stats['order_fail'] += 1
             return False
-
-        if real['dir'] != direction:
-            self.tg(f"🚨 اتجاه خاطئ! طلب:{direction} فعلي:{real['dir']}")
-            self._force_close(sym)
+        elif real['dir'] != direction:
+            self.tg(f"🚨 اتجاه خاطئ! {sym}")
+            self._force_close_now(sym)
             return False
+        else:
+            real_entry = real['entry']
+            real_qty = real['qty']
+
+        # ✅ إعادة حساب SL/TP من سعر الدخول الفعلي!
+        sl = real_entry - (self.CFG['sl_mult'] * atr) if direction == 'long' else real_entry + (self.CFG['sl_mult'] * atr)
+        tp = real_entry + (self.CFG['tp_mult'] * atr) if direction == 'long' else real_entry - (self.CFG['tp_mult'] * atr)
 
         with self.trade_lock:
             self.trade_settings = {
-                'sym': sym, 'dir': direction, 'entry': real['entry'],
-                'qty': real['qty'], 'sl': sl, 'tp': tp,
+                'sym': sym, 'dir': direction, 'entry': real_entry,
+                'qty': real_qty, 'sl': sl, 'tp': tp,
                 'strategy': '🐋حوت' if is_whale else 'نقاط',
                 'reason': reason, 'time': time.time(),
                 'partial': False, 'trail_active': False, 'highest_pct': 0
@@ -393,31 +470,39 @@ class SmartBot:
         icon = "🟢" if direction == 'long' else "🔴"
         msg = f"{icon} *صفقة #{self.day_trades}*\n"
         msg += f"🪙 {sym}\n"
-        msg += f"💵 {self.fmt(real['entry'])} | ⚖️ {self.fmt(real['qty'], 4)}\n"
+        msg += f"💵 دخول: {self.fmt(real_entry)}\n"
+        msg += f"⚖️ {self.fmt(real_qty, 4)}\n"
         msg += f"🛑 {self.fmt(sl)} | 🎯 {self.fmt(tp)}\n"
-        msg += f"📝 {reason}\n🆔 {order.get('id','?')}"
+        msg += f"📝 {reason}\n🆔 {order.get('id', '?')}"
         self.tg(msg)
         return True
 
-    def _force_close(self, sym):
+    def _force_close_now(self, sym):
         try:
             real = self._get_real_position()
-            if not real or real['sym'] != sym: return
+            if not real or real == 'ERR' or real['sym'] != sym:
+                return
             d = real['dir']
             pos_side = 'LONG' if d == 'long' else 'SHORT'
-            qty = float(self.exchange.amount_to_precision(sym, real['qty']))
+            qty = self._precise_qty(sym, real['qty'])
             if qty > 0:
+                self.log(f"FORCE CLOSE: {d} {sym}")
                 self._order('sell' if d == 'long' else 'buy', sym, qty, pos_side=pos_side)
             with self.trade_lock:
-                self.trade_settings = None
+                if self.trade_settings and self.trade_settings['sym'] == sym:
+                    self.trade_settings = None
         except Exception as e:
-            self.log(f"FORCE CLOSE ERR: {e}")
+            self.log(f"FORCE ERR: {e}")
 
     def _close(self, reason, pct, partial=False):
         with self.trade_lock:
-            if not self.trade_settings: return
+            if not self.trade_settings:
+                return
             t = self.trade_settings.copy()
-            sym, d, qty = t['sym'], t['dir'], float(t['qty'])
+            sym = t['sym']
+            d = t['dir']
+            qty = float(t['qty'])
+
             if partial:
                 qty /= 2
                 t['partial'] = True
@@ -425,9 +510,9 @@ class SmartBot:
                 self.trade_settings = t
 
         pos_side = 'LONG' if d == 'long' else 'SHORT'
-        try: fq = float(self.exchange.amount_to_precision(sym, qty))
-        except: fq = qty
-        if fq <= 0: return
+        fq = self._precise_qty(sym, qty)
+        if fq <= 0:
+            return
 
         order = self._order('sell' if d == 'long' else 'buy', sym, fq, pos_side=pos_side)
         if not order:
@@ -441,8 +526,10 @@ class SmartBot:
         with self.trade_lock:
             self._evolve(pct >= 0)
             self.day_pnl += pct
-            if pct >= 0: self.stats['wins'] += 1
-            else: self.stats['losses'] += 1
+            if pct >= 0:
+                self.stats['wins'] += 1
+            else:
+                self.stats['losses'] += 1
             self.trade_settings = None
 
         icon = "🏆" if pct >= 0 else "📉"
@@ -453,8 +540,10 @@ class SmartBot:
     # ================================================================
 
     def _manage(self):
-        # ✅ اسأل المنصة أولاً
         real = self._get_real_position()
+
+        if real == 'ERR':
+            return  # ✅ خطأ شبكة - لا نغير شيئاً
 
         with self.trade_lock:
             s = self.trade_settings.copy() if self.trade_settings else None
@@ -462,11 +551,15 @@ class SmartBot:
         # ✅ لا يوجد شيء في المنصة
         if not real:
             if s:
-                self.log(f"SYNC: Position closed externally {s['sym']}")
-                with self.trade_lock: self.trade_settings = None
+                self.log(f"SYNC: Closed externally {s['sym']}")
+                with self.trade_lock:
+                    self.trade_settings = None
             return
 
-        sym, d, entry, pnl = real['sym'], real['dir'], real['entry'], real['pnl_pct']
+        sym = real['sym']
+        d = real['dir']
+        entry = real['entry']
+        pnl = real['pnl_pct']
 
         # ✅ تناقض
         if s and (s['sym'] != sym or s['dir'] != d):
@@ -493,47 +586,61 @@ class SmartBot:
             s = self.trade_settings.copy()
 
         ticker = self._ticker(sym)
-        if not ticker: return
+        if not ticker:
+            return
         cp = ticker['last']
 
-        # ✅ طباعة الحقيقة
-        self.log(f"GUARD: {d} {sym} | {pnl:+.2f}% REAL | SL:{s['sl']:.1f}")
+        self.log(f"GUARD: {d} {sym} | {pnl:+.2f}% REAL")
 
         # ✅ فحص SL
-        if d == 'long' and cp <= s['sl']: self._close("🛑 SL", pnl); return
-        if d == 'short' and cp >= s['sl']: self._close("🛑 SL", pnl); return
+        if d == 'long' and cp <= s['sl']:
+            self._close("🛑 SL", pnl)
+            return
+        if d == 'short' and cp >= s['sl']:
+            self._close("🛑 SL", pnl)
+            return
 
         # ✅ فحص TP
         tp = s.get('tp', 0)
         if tp > 0:
-            if d == 'long' and cp >= tp: self._close("🎯 TP", pnl); return
-            if d == 'short' and cp <= tp: self._close("🎯 TP", pnl); return
+            if d == 'long' and cp >= tp:
+                self._close("🎯 TP", pnl)
+                return
+            if d == 'short' and cp <= tp:
+                self._close("🎯 TP", pnl)
+                return
 
         # ✅ تحديث أعلى ربح
         with self.trade_lock:
-            if self.trade_settings and pnl > self.trade_settings.get('highest_pct', 0):
-                self.trade_settings['highest_pct'] = pnl
+            if self.trade_settings:
+                if pnl > self.trade_settings.get('highest_pct', 0):
+                    self.trade_settings['highest_pct'] = pnl
 
         with self.trade_lock:
-            if not self.trade_settings: return
+            if not self.trade_settings:
+                return
 
             # ✅ خروج جزئي
             if pnl >= self.CFG['partial_at'] and not self.trade_settings.get('partial'):
                 self.trade_settings['partial'] = True
                 self.trade_settings['sl'] = self.trade_settings['entry']
                 self._close("⚡ جزئي", pnl, partial=True)
-                if tp > 0 and entry > 0:
-                    if d == 'long': self.trade_settings['tp'] = entry + (tp - entry) * 0.6
-                    else: self.trade_settings['tp'] = entry - (entry - tp) * 0.6
+                tp_v = self.trade_settings.get('tp', 0)
+                ent = self.trade_settings['entry']
+                if tp_v > 0 and ent > 0:
+                    if d == 'long':
+                        self.trade_settings['tp'] = ent + (tp_v - ent) * 0.6
+                    else:
+                        self.trade_settings['tp'] = ent - (ent - tp_v) * 0.6
                 return
 
-            # ✅ Trailing Stop محسن
+            # ✅ Trailing
             highest = self.trade_settings.get('highest_pct', 0)
-
             if pnl >= self.CFG['trail_after']:
                 if not self.trade_settings.get('trail_active'):
                     self.trade_settings['trail_active'] = True
-                    self.log(f"TRAIL ON at {pnl:.2f}%", notify=True, msg_ar=f"🐢 تتبع عند {pnl:.2f}%")
+                    self.log(f"TRAIL ON {pnl:.2f}%", notify=True,
+                             msg_ar=f"🐢 تتبع عند {pnl:.2f}%")
 
                 drawdown = highest - pnl
                 if drawdown >= self.CFG['trail_min_move']:
@@ -542,12 +649,12 @@ class SmartBot:
                         new_sl = cp * (1 - step / 100)
                         if new_sl > self.trade_settings['sl']:
                             self.trade_settings['sl'] = new_sl
-                            self.stats['trail_adjustments'] += 1
+                            self.stats['trail_adj'] += 1
                     else:
                         new_sl = cp * (1 + step / 100)
                         if new_sl < self.trade_settings['sl']:
                             self.trade_settings['sl'] = new_sl
-                            self.stats['trail_adjustments'] += 1
+                            self.stats['trail_adj'] += 1
 
             # ✅ انتهاء الوقت
             elapsed = (time.time() - self.trade_settings['time']) / 60
@@ -565,7 +672,7 @@ class SmartBot:
         while True:
             try:
                 sync_count += 1
-                if sync_count >= 20:  # مزامنة كل 20 ثانية
+                if sync_count >= 30:
                     self._force_sync()
                     sync_count = 0
                 self._manage()
@@ -576,17 +683,20 @@ class SmartBot:
     def _summary(self):
         total = self.stats['wins'] + self.stats['losses']
         wr = (self.stats['wins'] / total * 100) if total > 0 else 0
-        self.tg(f"📊 {self.day_trades}/{self.CFG['max_daily']} | {wr:.0f}% | صافي:{self.day_pnl:+.2f}% | 🐋{self.stats['whale_spotted']}")
+        self.tg(f"📊 {self.day_trades}/{self.CFG['max_daily']} | "
+                f"{wr:.0f}% | صافي:{self.day_pnl:+.2f}% | "
+                f"🐋{self.stats['whale_spotted']}")
 
     def run(self):
-        self.tg("🐋 *V13.0 STABLE يعمل!*")
+        self.tg("🐋 *V14.0 Rock Solid!*")
         threading.Thread(target=self._guard_loop, daemon=True).start()
 
         while True:
             try:
                 today = datetime.date.today()
                 if self.day != today:
-                    if self.day and self.day_trades > 0: self._summary()
+                    if self.day and self.day_trades > 0:
+                        self._summary()
                     with self.trade_lock:
                         self.day = today
                         self.day_trades = 0
@@ -599,9 +709,9 @@ class SmartBot:
                     self.log("NEW DAY", notify=True, msg_ar="📅 يوم جديد!")
 
                 with self.trade_lock:
-                    has = self.trade_settings is not None
+                    has_trade = self.trade_settings is not None
 
-                if has or self.day_trades >= self.CFG['max_daily']:
+                if has_trade or self.day_trades >= self.CFG['max_daily']:
                     time.sleep(600 if self.day_trades >= self.CFG['max_daily'] else 15)
                     continue
 
@@ -615,27 +725,30 @@ class SmartBot:
                     time.sleep(30)
                     continue
 
-                syms = [s for s, t in tickers.items()
-                        if s.endswith('/USDT:USDT')
-                        and t.get('quoteVolume')
-                        and t.get('last')
-                        and t['quoteVolume'] * t['last'] > self.CFG['vol_filter']][:80]
+                syms = []
+                for s, t in tickers.items():
+                    if s.endswith('/USDT:USDT'):
+                        qv = t.get('quoteVolume', 0)
+                        last = t.get('last', 0)
+                        if qv and last and qv * last > self.CFG['vol_filter']:
+                            syms.append(s)
+                syms = syms[:80]
 
                 if not syms:
                     time.sleep(60)
                     continue
 
-                self.log(f"SCAN #{self.scan_num} | 🐋{self.stats['whale_spotted']}")
+                self.log(f"SCAN #{self.scan_num}")
 
                 found = False
                 for sym in syms[:self.CFG['max_scan']]:
                     self.stats['scanned'] += 1
-                    d, p, atr, reason, is_whale = self._score(sym)
+                    d, atr, reason, is_whale = self._score(sym)
 
-                    if d and p > 0 and atr > 0:
+                    if d and atr > 0:
                         with self.trade_lock:
-                            can = self.trade_settings is None
-                        if can and self._open(d, sym, p, atr, reason, is_whale):
+                            can_open = self.trade_settings is None
+                        if can_open and self._open(d, sym, atr, reason, is_whale):
                             found = True
                             break
 
@@ -651,6 +764,7 @@ class SmartBot:
                 time.sleep(15)
 
             time.sleep(self.CFG['loop_sec'])
+
 
 if __name__ == "__main__":
     bot = SmartBot()
