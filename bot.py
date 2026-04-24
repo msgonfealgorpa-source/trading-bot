@@ -1,10 +1,5 @@
-import time, pandas as pd, ta, requests, datetime, os, sys
-import yfinance as yf
-import warnings
+import time, pandas as pd, ta, requests, datetime, os, sys, numpy as np
 from zoneinfo import ZoneInfo
-
-# إخفاء تحذيرات yfinance المزعجة
-warnings.filterwarnings("ignore")
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -13,9 +8,9 @@ class QuotexSniperBot:
     """
     بوت القناص V12.0 (5-Min Triple Confirmation)
     =============================================
-    - مصدر البيانات: Yahoo Finance (فوركس + كريبتو).
+    - مصدر البيانات: CryptoCompare (مستقر، لا يسبب Crash).
     - الاستراتيجية: EMA 200 + Bollinger Bands + Stochastic.
-    - الفريم الزمني: 5 دقائق.
+    - الفريم الزمني: 5 دقائق (مصنوع بدقة باستخدام Pandas).
     - التوقيت: إفريقيا/طرابلس (ليبيا).
     """
     
@@ -24,46 +19,41 @@ class QuotexSniperBot:
         self.tg_chat = os.environ.get('CHAT_ID')
         
         if not self.tg_token or not self.tg_chat:
-            print("[FATAL ERROR] Missing TELEGRAM_TOKEN or CHAT_ID in environment variables!")
+            print("[FATAL ERROR] Missing TELEGRAM_TOKEN or CHAT_ID!")
             return
         
-        # التوقيت المحلي لليبيا
         self.TZ = ZoneInfo("Africa/Tripoli")
         
-        # القاموس السحري: ربط رموز Yahoo Finance برموز منصة Quotex
+        # قاموس الرموز (متوافق مع CryptoCompare)
         self.SYMBOLS_MAP = {
             # ======= الكريبتو =======
-            'BTC-USD': 'BTCUSD(t)', 
-            'ETH-USD': 'ETHUSD(t)', 
-            'BNB-USD': 'BNBUSD(t)', 
-            'SOL-USD': 'SOLUSD(t)',
-            'XRP-USD': 'XRPUSD(t)', 
-            'DOGE-USD': 'DOGEUSD(t)',
-            'ADA-USD': 'ADAUSD(t)',
-            # ======= الفوركس الحقيقي (يعمل من الإثنين للجمعة) =======
-            'EURUSD=X': 'EUR/USD', 
-            'GBPUSD=X': 'GBP/USD', 
-            'USDJPY=X': 'USD/JPY', 
-            'AUDUSD=X': 'AUD/USD', 
-            'USDCAD=X': 'USD/CAD', 
-            'EURGBP=X': 'EUR/GBP', 
-            'NZDUSD=X': 'NZD/USD', 
-            'EURJPY=X': 'EUR/JPY'
+            'BTC/USDT': 'BTCUSD(t)', 
+            'ETH/USDT': 'ETHUSD(t)', 
+            'BNB/USDT': 'BNBUSD(t)', 
+            'SOL/USDT': 'SOLUSD(t)',
+            'XRP/USDT': 'XRPUSD(t)', 
+            'DOGE/USDT': 'DOGEUSD(t)',
+            'ADA/USDT': 'ADAUSD(t)',
+            # ======= أزواج الفوركس / OTC =======
+            'EUR/USD': 'EUR/USD OTC', 
+            'GBP/USD': 'GBP/USD OTC', 
+            'USD/JPY': 'USD/JPY OTC', 
+            'AUD/USD': 'AUD/USD OTC', 
+            'USD/CAD': 'USD/CAD OTC', 
+            'EUR/GBP': 'EUR/GBP OTC', 
+            'NZD/USD': 'NZD/USD OTC', 
+            'EUR/JPY': 'EUR/JPY OTC'
         }
         
-        self.yf_tickers_list = list(self.SYMBOLS_MAP.keys())
         self.last_signal_time = {}
         self.stats = {'signals_sent': 0, 'scans': 0}
         self.report_time = time.time()
-        
-        # إعدادات الاستراتيجية
-        self.TIMEFRAME = '5m'
-        self.COOLDOWN_SEC = 300 # منع إرسال إشارة لنفس الزوج قبل مرور 5 دقائق
+        self.COOLDOWN_SEC = 300 # 5 دقائق مهلة بين الإشارات لنفس الزوج
         
         msg  = "🎯 *بوت القناص (5 دقائق)*\n"
         msg += "━━━━━━━━━━━━━━━━\n"
         msg += "🕐 التوقيت: ليبيا (GMT+2)\n"
-        msg += f"📋 مراقبة {len(self.SYMBOLS_MAP)} زوج (فوركس + كريبتو)\n"
+        msg += f"📋 مراقبة {len(self.SYMBOLS_MAP)} زوج\n"
         msg += "🧠 الاستراتيجية 3 أبعاد:\n"
         msg += "1️⃣ `EMA 200` (للترند)\n"
         msg += "2️⃣ `Bollinger Bands` (للتشبع)\n"
@@ -89,146 +79,160 @@ class QuotexSniperBot:
         print(f"[{ts}] {msg}") 
 
     # ================================================================
-    #                            جلب البيانات
+    #                   جلب البيانات وتصنيع الفريم 5 دقائق
     # ================================================================
     
-    def _fetch_all_data(self):
-        """جلب بيانات جميع العملات دفعة واحدة لتجنب حظر الـ API"""
+    def _get_5m_data(self, sym):
+        """يجلب بيانات الدقيقة ويحولها لفريم 5 دقائق بدون أي ضغط على الذاكرة"""
+        base, quote = sym.split('/')
+        url = "https://min-api.cryptocompare.com/data/v2/histominute"
+        # نجلب 1500 شمعة دقيقة (حوالي يوم ونصف) لنضمن تكوين 200 شمعة 5 دقائق
+        params = {'fsym': base, 'tsym': quote, 'limit': 1500}
+        
         try:
-            # نجلب بيانات يومين بفريم 5 دقائق لكل الأزواج
-            data = yf.download(
-                tickers=self.yf_tickers_list, 
-                period='2d', 
-                interval=self.TIMEFRAME, 
-                group_by='ticker',
-                progress=False,
-                threads=True
-            )
-            return data
+            r = requests.get(url, params=params, timeout=10)
+            d = r.json()
+            if d.get('Response') == 'Success':
+                raw = d.get('Data', {}).get('Data', [])
+                if not raw: return None
+                
+                df = pd.DataFrame(raw, columns=['time', 'open', 'high', 'low', 'close', 'volumeto'])
+                df['time'] = pd.to_datetime(df['time'], unit='ms')
+                
+                # تحويل البيانات الخام إلى شموع 5 دقائق حقيقية
+                df_5m = df.set_index('time').resample('5min').agg({
+                    'open': 'first',
+                    'high': 'max',
+                    'low': 'min',
+                    'close': 'last',
+                    'volumeto': 'sum'
+                }).dropna().reset_index()
+                
+                # نأخذ آخر 210 شمعة لحساب EMA 200 بدقة
+                return df_5m.tail(210)
         except Exception as e:
-            self.log(f"Data Fetch Error: {e}")
-            return None
+            self.log(f"Data Err {sym}: {str(e)[:30]}")
+        return None
 
     # ================================================================
-    #                  🎯 استراتيجية القناص (Triple Confirmation)
+    #         🎯 استراتيجية القناص (Triple Confirmation)
     # ================================================================
     
-    def _analyze_symbol(self, df):
-        if df is None or len(df) < 200:
+    def _analyze_symbol(self, df_5m):
+        if df_5m is None or len(df_5m) < 200:
             return None, 0
             
-        # تنظيف البيانات وتوحيد أسماء الأعمدة
-        df = df.copy()
-        df.dropna(inplace=True)
-        
-        # 1. حساب المتوسط المتحرك (EMA 200) لتحديد الاتجاه العام
-        df['ema200'] = ta.trend.ema_indicator(df['Close'], window=200)
-        
-        # 2. حساب البولينجر باندز (Bollinger Bands 20, 2) لمعرفة مناطق الانعكاس
-        bb = ta.volatility.BollingerBands(close=df['Close'], window=20, window_dev=2)
-        df['bb_upper'] = bb.bollinger_hband()
-        df['bb_lower'] = bb.bollinger_lband()
-        
-        # 3. حساب الستوكاستيك (Stochastic 14, 3, 3) كلحظة دخول
-        stoch = ta.momentum.StochasticOscillator(high=df['High'], low=df['Low'], close=df['Close'], window=14, smooth_window=3)
-        df['stoch_k'] = stoch.stoch()
-        df['stoch_d'] = stoch.stoch_signal()
-        
-        cur = df.iloc[-1]
-        prev = df.iloc[-2]
-        price = cur['Close']
-        
-        if pd.isna(cur['ema200']) or pd.isna(cur['bb_upper']) or pd.isna(cur['stoch_k']):
-            return None, price
+        try:
+            # توحيد أسماء الأعمدة لتتناسب مع مكتبة ta
+            df = df_5m.rename(columns={
+                'open': 'Open', 'high': 'High', 
+                'low': 'Low', 'close': 'Close'
+            }).copy()
+            
+            # 1. حساب EMA 200
+            df['ema200'] = ta.trend.ema_indicator(df['Close'], window=200)
+            
+            # 2. حساب Bollinger Bands (20, 2)
+            bb = ta.volatility.BollingerBands(close=df['Close'], window=20, window_dev=2)
+            df['bb_upper'] = bb.bollinger_hband()
+            df['bb_lower'] = bb.bollinger_lband()
+            
+            # 3. حساب Stochastic (14, 3, 3)
+            stoch = ta.momentum.StochasticOscillator(high=df['High'], low=df['Low'], close=df['Close'], window=14, smooth_window=3)
+            df['stoch_k'] = stoch.stoch()
+            df['stoch_d'] = stoch.stoch_signal()
+            
+            cur = df.iloc[-1]
+            prev = df.iloc[-2]
+            price = cur['Close']
+            
+            # التحقق من عدم وجود قيم فارغة (NaN) في الشمعة الحالية
+            if pd.isna(cur['ema200']) or pd.isna(cur['bb_upper']) or pd.isna(cur['stoch_k']):
+                return None, price
 
-        # ==========================================
-        # 🟢 شرط الشراء (CALL)
-        # ==========================================
-        # 1. الترند صاعد (السعر فوق EMA 200)
-        uptrend = price > cur['ema200']
-        # 2. السعر ضرب الخط السفلي للبولينجر (تشبع بيعي قوي)
-        bb_touch_lower = cur['Low'] <= cur['bb_lower'] or prev['Low'] <= prev['bb_lower']
-        # 3. الستوكاستيك تحت 20 وحصل تقاطع للأعلى
-        stoch_cross_up = (prev['stoch_k'] <= prev['stoch_d']) and (cur['stoch_k'] > cur['stoch_d']) and (cur['stoch_k'] < 20)
-        
-        if uptrend and bb_touch_lower and stoch_cross_up:
-            return 'CALL', price
+            # ==========================================
+            # 🟢 شرط الشراء (CALL)
+            # ==========================================
+            uptrend = price > cur['ema200']
+            bb_touch_lower = cur['Low'] <= cur['bb_lower'] or prev['Low'] <= prev['bb_lower']
+            stoch_cross_up = (prev['stoch_k'] <= prev['stoch_d']) and (cur['stoch_k'] > cur['stoch_d']) and (cur['stoch_k'] < 20)
             
-        # ==========================================
-        # 🔴 شرط البيع (PUT)
-        # ==========================================
-        # 1. الترند هابط (السعر تحت EMA 200)
-        downtrend = price < cur['ema200']
-        # 2. السعر ضرب الخط العلوي للبولينجر (تشبع شرائي قوي)
-        bb_touch_upper = cur['High'] >= cur['bb_upper'] or prev['High'] >= prev['bb_upper']
-        # 3. الستوكاستيك فوق 80 وحصل تقاطع للأسفل
-        stoch_cross_down = (prev['stoch_k'] >= prev['stoch_d']) and (cur['stoch_k'] < cur['stoch_d']) and (cur['stoch_k'] > 80)
-        
-        if downtrend and bb_touch_upper and stoch_cross_down:
-            return 'PUT', price
+            if uptrend and bb_touch_lower and stoch_cross_up:
+                return 'CALL', price
+                
+            # ==========================================
+            # 🔴 شرط البيع (PUT)
+            # ==========================================
+            downtrend = price < cur['ema200']
+            bb_touch_upper = cur['High'] >= cur['bb_upper'] or prev['High'] >= prev['bb_upper']
+            stoch_cross_down = (prev['stoch_k'] >= prev['stoch_d']) and (cur['stoch_k'] < cur['stoch_d']) and (cur['stoch_k'] > 80)
             
-        return None, price
+            if downtrend and bb_touch_upper and stoch_cross_down:
+                return 'PUT', price
+                
+        except Exception as e:
+            return None, 0
+            
+        return None, 0
 
     # ================================================================
     #                            إرسال الإشارة
     # ================================================================
 
-    def _send_signal(self, yf_sym, qx_sym, direction, price):
+    def _send_signal(self, api_sym, qx_sym, direction, price):
         self.stats['signals_sent'] += 1
-        self.last_signal_time[yf_sym] = time.time()
+        self.last_signal_time[api_sym] = time.time()
         
         icon = "🟢" if direction == 'CALL' else "🔴"
         now_libya = datetime.datetime.now(self.TZ)
         expiry_time = now_libya + datetime.timedelta(minutes=5)
+        
+        # تحديد عدد الخانات العشرية حسب نوع الزوج
+        decimals = 5 if 'USD' in api_sym and 'USDT' not in api_sym else 2
         
         msg  = f"🎯 *إشارة قنص مؤكدة*\n"
         msg += f"━━━━━━━━━━━━━━━━\n"
         msg += f"🪙 الزوج: *{qx_sym}*\n"
         msg += f"📊 الاتجاه: *{direction}* {icon}\n"
         msg += f"⏱️ الانتهاء: *{expiry_time.strftime('%H:%M:%S')}* (5 دقائق)\n"
-        msg += f"💵 السعر: `{price:.5f}`\n"
+        msg += f"💵 السعر: `{price:.{decimals}f}`\n"
         msg += f"🧠 الاستراتيجية: `EMA200 + BB + Stoch`\n"
         msg += f"━━━━━━━━━━━━━━━━"
         
         self.tg(msg)
-        self.log(f"SIGNAL FIRED: {qx_sym} {direction} @ {price:.5f}")
+        self.log(f"SIGNAL FIRED: {qx_sym} {direction} @ {price:.{decimals}f}")
 
     # ================================================================
     #                            التشغيل الرئيسي
     # ================================================================
     
     def run(self):
-        self.log("SNIPER STARTED - Fetching bulk data every 60 seconds...")
+        self.log("SNIPER STARTED - Analyzing 5m charts...")
         
         while True:
             try:
                 self.stats['scans'] += 1
                 
-                # جلب بيانات كل العملات في طلب واحد سريع
-                all_data = self._fetch_all_data()
-                
-                if all_data is not None and not all_data.empty:
-                    for yf_sym in self.yf_tickers_list:
-                        
-                        # استخراج بيانات الزوج المحدد من الجدول الضخم
-                        if len(self.yf_tickers_list) > 1:
-                            df_symbol = all_data[yf_sym]
-                        else:
-                            df_symbol = all_data
-                            
-                        qx_sym = self.SYMBOLS_MAP[yf_sym]
-                        
-                        # حماية الـ Cooldown (منع إرسال إشارة لنفس الزوج قبل 5 دقائق)
-                        if yf_sym in self.last_signal_time:
-                            if time.time() - self.last_signal_time[yf_sym] < self.COOLDOWN_SEC:
-                                continue
-                                
-                        direction, price = self._analyze_symbol(df_symbol)
-                        
-                        if direction:
-                            self._send_signal(yf_sym, qx_sym, direction, price)
-                else:
-                    self.log("No data received from Yahoo Finance. Retrying...")
+                # فحص الأزواج واحداً تلو الآخر (هذا يمنع الكرش تماماً)
+                for api_sym, qx_sym in self.SYMBOLS_MAP.items():
+                    
+                    # حماية الـ Cooldown 
+                    if api_sym in self.last_signal_time:
+                        if time.time() - self.last_signal_time[api_sym] < self.COOLDOWN_SEC:
+                            continue
+                    
+                    # 1. جلب البيانات وتصنيع الفريم
+                    df_5m = self._get_5m_data(api_sym)
+                    
+                    # 2. تحليل الاستراتيجية
+                    direction, price = self._analyze_symbol(df_5m)
+                    
+                    # 3. إطلاق الإشارة
+                    if direction and price > 0:
+                        self._send_signal(api_sym, qx_sym, direction, price)
+                    
+                    # مهلة ثانية واحدة فقط بين كل زوج لتجنب الضغط على الإنترنت
+                    time.sleep(1)
 
                 # تقرير صامت كل ساعة
                 if time.time() - self.report_time >= 3600:
@@ -239,7 +243,7 @@ class QuotexSniperBot:
                 self.log(f"MAIN LOOP ERR: {e}")
                 time.sleep(10)
             
-            # انتظار دقيقة كاملة قبل سحب شمعة جديدة (لأن الفريم 5 دقائق، لا داعي للضغط)
+            # انتظار دقيقة كاملة (لأن الفريم 5 دقائق، لا حاجة للفحص أسرع من ذلك)
             self.log("Cycle complete. Waiting 60 seconds...")
             time.sleep(60) 
 
