@@ -1,16 +1,15 @@
 import time, pandas as pd, ta, requests, datetime, os, sys, threading, numpy as np
-from zoneinfo import ZoneInfo # مكتبة التوقيت المدمجة (لا تحتاج تثبيت)
+from zoneinfo import ZoneInfo
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 class QuotexMonsterBot:
     """
-    بوت الوحش V11.0 (Quotex Pro Edition)
+    بوت الوحش V11.0 (Quotex Pro OTC Edition)
     ======================================
-    - التوقيت: ليبيا (GMT+2)
-    - الأزواج: كريبتو + فوركس + OTC (للويكاند)
-    - مصدر البيانات: CryptoCompare (بلا حجب جغرافي)
+    - رادار زخم خاص بالفوركس (يعوض غياب الحجم في OTC)
+    - شروط دخول متوازنة للخيارات الثنائية
     """
     
     def __init__(self):
@@ -21,12 +20,10 @@ class QuotexMonsterBot:
             print("[FATAL ERROR] Missing TELEGRAM_TOKEN or CHAT_ID in .env!")
             return
         
-        # ضبط التوقيت لليبيا
         self.TZ = ZoneInfo("Africa/Tripoli")
         
-        # قائمة الأزواج الشاملة (كريبتو + فوركس + OTC)
         self.QUOTEX_WHITELIST = {
-            # ======= العملات الرقمية (Crypto) =======
+            # ======= العملات الرقمية =======
             'BTC/USDT': 'BTCUSD(t)', 'ETH/USDT': 'ETHUSD(t)', 
             'BNB/USDT': 'BNBUSD(t)', 'SOL/USDT': 'SOLUSD(t)',
             'XRP/USDT': 'XRPUSD(t)', 'DOGE/USDT': 'DOGEUSD(t)',
@@ -34,7 +31,7 @@ class QuotexMonsterBot:
             'MATIC/USDT': 'MATICUSD(t)', 'AVAX/USDT': 'AVAXUSD(t)',
             'DOT/USDT': 'DOTUSD(t)', 'LINK/USDT': 'LINKUSD(t)',
             
-            # ======= أزواج الفوركس والـ OTC (للعطلات) =======
+            # ======= أزواج الفوركس والـ OTC =======
             'EUR/USD': 'EUR/USD OTC', 'GBP/USD': 'GBP/USD OTC', 
             'USD/JPY': 'USD/JPY OTC', 'AUD/USD': 'AUD/USD OTC', 
             'USD/CAD': 'USD/CAD OTC', 'EUR/GBP': 'EUR/GBP OTC', 
@@ -60,28 +57,30 @@ class QuotexMonsterBot:
             'whale_spotted': 0, 'choppy_blocked': 0, 'tilt_triggered': 0
         }
         
+        # تم تعديل الإعدادات لتكون مثالية للثنائيات
         self.CFG = {
             'max_daily_signals': 20,
-            'min_score': 5,
-            'score_gap': 2,
-            'loop_sec': 25, # تم رفعها قليلاً لتناسب كثرة الأزواج
+            'min_score': 4,       # تم تخفيضها من 5 لسرعة الاستجابة
+            'score_gap': 1,       # تم تخفيضها من 2 (فارق نقطة واحدة يكفي)
+            'loop_sec': 25,
             'summary_every': 1800,
             'tilt_after_losses': 3,
             'tilt_duration_min': 45,
-            'whale_level_1': 1.5,
-            'whale_level_2': 3.0,
-            'whale_level_3': 5.0,
-            'min_bb_width_pct': 0.1 
+            'whale_level_1': 1.2,
+            'whale_level_2': 2.5,
+            'whale_level_3': 4.0,
+            'min_bb_width_pct': 0.03 # تم تخفيضها لتتناسب مع فوركس
         }
         
         self.tg("🔄 جاري التشغيل وضبط التوقيت...")
         self.tg(f"✅ تم الربط بنجاح! التوقيت الحالي: {self._get_time()}")
         
-        msg  = "🐋 *بوت الوحش V11.0 (Pro Edition)*\n"
+        msg  = "🐋 *بوت الوحش V11.0 (Pro OTC)*\n"
         msg += "━━━━━━━━━━━━━━━━\n"
         msg += f"🕐 التوقيت: ليبيا (GMT+2)\n"
-        msg += f"📋 مراقبة {len(self.QUOTEX_WHITELIST)} زوج (كريبتو + OTC)\n"
-        msg += "🚫 فلتر التذبذب + رادار الحيتان مفعّل"
+        msg += f"📋 مراقبة {len(self.QUOTEX_WHITELIST)} زوج\n"
+        msg += "⚡ رادار الزخم (Momentum) مفعّل للـ OTC\n"
+        msg += "🚫 فلتر التذبذب مفعّل"
         self.tg(msg)
 
     def _get_time(self):
@@ -102,7 +101,7 @@ class QuotexMonsterBot:
             self.tg(msg_ar if msg_ar else msg_en)
 
     # ================================================================
-    #              API & DATA (CryptoCompare)
+    #              API & DATA
     # ================================================================
     
     def _fetch_ticker(self, sym):
@@ -150,7 +149,7 @@ class QuotexMonsterBot:
         return df_1m, df_5m
     
     # ================================================================
-    #     🧠 الاستراتيجية + رادار الحيتان + فلتر التذبذب
+    #     🧠 الاستراتيجية المتطورة (كريبتو + OTC)
     # ================================================================
     
     def _score_binary(self, sym):
@@ -161,11 +160,9 @@ class QuotexMonsterBot:
         df_1m['ema21'] = ta.trend.ema_indicator(df_1m['c'], 21)
         df_1m['rsi'] = ta.momentum.rsi(df_1m['c'], 14)
         df_1m['macd'] = ta.trend.macd_diff(df_1m['c'])
-        df_1m['vm'] = df_1m['v'].rolling(20).mean()
         
         df_5m['ema50'] = ta.trend.ema_indicator(df_5m['c'], 50)
         
-        # فلتر التذبذب (Bollinger Bands Width)
         bb = ta.volatility.BollingerBands(df_5m['c'], 20, 2)
         df_5m['bb_width'] = (bb.bollinger_hband() - bb.bollinger_lband()) / bb.bollinger_mavg() * 100
         
@@ -178,10 +175,12 @@ class QuotexMonsterBot:
         L, S = 0, 0; LR, SR = [], []
         is_whale = False
         
+        # 1. الاتجاه العام
         if not pd.isna(cur_5m['ema50']):
             if cur_5m['c'] > cur_5m['ema50']: L += 2; LR.append("5M_UP")
             else: S += 2; SR.append("5M_DN")
         
+        # 2. تقاطع EMA
         ema_ok = all(not pd.isna(x) for x in [cur['ema9'], cur['ema21'], prev['ema9'], prev['ema21']])
         if ema_ok:
             if prev['ema9'] <= prev['ema21'] and cur['ema9'] > cur['ema21']: L += 3; LR.append("CROSS_UP")
@@ -189,34 +188,58 @@ class QuotexMonsterBot:
             elif cur['ema9'] > cur['ema21']: L += 1
             else: S += 1
             
+        # 3. RSI (تم رفع النقاط في مناطق الاشباع)
         if not pd.isna(cur['rsi']):
-            if cur['rsi'] < 30: L += 2; LR.append(f"RSI_{cur['rsi']:.0f}")
-            elif cur['rsi'] > 70: S += 2; SR.append(f"RSI_{cur['rsi']:.0f}")
+            if cur['rsi'] < 25: L += 3; LR.append(f"RSI_{cur['rsi']:.0f}")
+            elif cur['rsi'] < 35: L += 2; LR.append(f"RSI_{cur['rsi']:.0f}")
+            elif cur['rsi'] > 75: S += 3; SR.append(f"RSI_{cur['rsi']:.0f}")
+            elif cur['rsi'] > 65: S += 2; SR.append(f"RSI_{cur['rsi']:.0f}")
             elif 40 <= cur['rsi'] < 50: L += 1
             elif 50 < cur['rsi'] <= 60: S += 1
             
+        # 4. MACD
         if not pd.isna(cur['macd']) and not pd.isna(prev['macd']):
             if cur['macd'] > 0 and cur['macd'] > prev['macd']: L += 1
             elif cur['macd'] < 0 and cur['macd'] < prev['macd']: S += 1
             
+        # 5. قوة الشمعة (Price Action)
         body = abs(cur['c'] - cur['o']); rng = cur['h'] - cur['l']
-        if rng > 0 and (body / rng) > 0.6:
+        if rng > 0 and (body / rng) > 0.7:
+            if cur['c'] > cur['o']: L += 2; LR.append("STRONG_BULL")
+            else: S += 2; SR.append("STRONG_BEAR")
+        elif rng > 0 and (body / rng) > 0.5:
             if cur['c'] > cur['o']: L += 1; LR.append("BULL_CAND")
             else: S += 1; SR.append("BEAR_CAND")
         
+        # ===== ⚡ 6. رادار الزخم / الحيتان (ذكاء مزدوج) =====
+        df_1m['vm'] = df_1m['v'].rolling(20).mean()
         if not pd.isna(cur['vm']) and cur['vm'] > 0:
+            # للعملات الرقمية (يعتمد على الحجم)
             vol_ratio = cur['v'] / cur['vm']
-            if vol_ratio >= self.CFG['whale_level_3']:
-                is_whale = True
-                if cur['c'] > cur['o']: L += 4; LR.append(f"🐋WHALE_{vol_ratio:.0f}x")
-                else: S += 4; SR.append(f"🐋WHALE_{vol_ratio:.0f}x")
-            elif vol_ratio >= self.CFG['whale_level_2']:
-                is_whale = True
-                if cur['c'] > cur['o']: L += 3; LR.append(f"🐋WHALE_{vol_ratio:.0f}x")
-                else: S += 3; SR.append(f"🐋WHALE_{vol_ratio:.0f}x")
-            elif vol_ratio >= self.CFG['whale_level_1']:
-                if cur['c'] > cur['o']: L += 1; LR.append(f"VOL_{vol_ratio:.1f}x")
-                else: S += 1; SR.append(f"VOL_{vol_ratio:.1f}x")
+            if vol_ratio >= self.CFG['whale_level_3']: is_whale = True
+            elif vol_ratio >= self.CFG['whale_level_2']: is_whale = True
+            elif vol_ratio >= self.CFG['whale_level_1']: pass
+            
+            if is_whale:
+                pts = 4 if vol_ratio >= self.CFG['whale_level_3'] else 3
+                if cur['c'] > cur['o']: L += pts; LR.append(f"🐋WHALE_{vol_ratio:.0f}x")
+                else: S += pts; SR.append(f"🐋WHALE_{vol_ratio:.0f}x")
+        else:
+            # للفوركس و OTC (يعتمد على طول الشمعة كزخم حاد)
+            df_1m['range'] = df_1m['h'] - df_1m['l']
+            avg_range = df_1m['range'].rolling(20).mean()
+            cur_range = cur['h'] - cur['l']
+            avg_rng_val = avg_range.iloc[-1]
+            
+            if not pd.isna(avg_rng_val) and avg_rng_val > 0:
+                momentum_ratio = cur_range / avg_rng_val
+                if momentum_ratio >= 2.5: 
+                    is_whale = True
+                    if cur['c'] > cur['o']: L += 3; LR.append(f"⚡MOM_{momentum_ratio:.1f}x")
+                    else: S += 3; SR.append(f"⚡MOM_{momentum_ratio:.1f}x")
+                elif momentum_ratio >= 1.8:
+                    if cur['c'] > cur['o']: L += 2; LR.append(f"MOM_{momentum_ratio:.1f}x")
+                    else: S += 2; SR.append(f"MOM_{momentum_ratio:.1f}x")
         
         if is_whale: self.stats['whale_spotted'] += 1
         
@@ -250,9 +273,8 @@ class QuotexMonsterBot:
             self.day_signals += 1
             
         icon = "🟢" if direction == 'CALL' else "🔴"
-        whale_tag = "\n🐋 تدفق حيتان قوي!" if is_whale else ""
+        whale_tag = "\n⚡ زخم حاد / حوت!" if is_whale else ""
         
-        # حساب وقت الانتهاء الدقيق بتوقيت ليبيا
         now_libya = datetime.datetime.now(self.TZ)
         expiry_time = now_libya + datetime.timedelta(minutes=duration)
         expiry_str = expiry_time.strftime("%H:%M:%S")
@@ -269,8 +291,6 @@ class QuotexMonsterBot:
         msg += "━━━━━━━━━━━━━━━━"
         
         self.tg(msg)
-        
-        # تفعيل التحقق الذاتي في Thread منفصل
         threading.Thread(target=self._validate_signal_outcome, args=(b_sym, direction, price, duration), daemon=True).start()
 
     def _validate_signal_outcome(self, sym, direction, entry_price, duration):
@@ -306,16 +326,16 @@ class QuotexMonsterBot:
         total = self.day_wins + self.day_losses
         win_rate = (self.day_wins / total * 100) if total > 0 else 0
         msg  = "📊 *تقرير إشارات اليوم (توقيت ليبيا)*\n"
+        msg += f"🔍 فحص: {self.stats['scanned']} | مرفوضة (ضعيفة): {self.stats['no_score']}\n"
         msg += f"🚀 إشارات مُرسلة: {self.day_signals}/{self.CFG['max_daily_signals']}\n"
-        msg += f"🏆 نسبة الربح (Auto-Track): {win_rate:.1f}% ({self.day_wins}W / {self.day_losses}L)\n"
-        msg += f"🐋 حيتان رصدت: {self.stats['whale_spotted']}\n"
-        msg += f"🚫 تم حظر (تذبذب): {self.stats['choppy_blocked']}\n"
-        msg += f"🛡️ مرات الإيقاف (Tilt): {self.stats['tilt_triggered']}"
+        msg += f"🏆 نسبة الربح: {win_rate:.1f}% ({self.day_wins}W / {self.day_losses}L)\n"
+        msg += f"⚡ زخم/حيتان: {self.stats['whale_spotted']} | تذبذب: {self.stats['choppy_blocked']}\n"
+        msg += f"🛡️ إيقاف (Tilt): {self.stats['tilt_triggered']}"
         self.tg(msg)
 
     def run(self):
         self.tg("🐋 *مسار الصيد بدأ!*")
-        self.log("HUNTER STARTED", notify=True, msg_ar="🏹 جاري مراقبة الأسواق المحلية والعالمية!")
+        self.log("HUNTER STARTED", notify=True, msg_ar="🏹 جاري مراقبة الأسواق!")
         
         while True:
             try:
@@ -326,7 +346,7 @@ class QuotexMonsterBot:
                         self.day = today; self.day_signals = 0; self.day_wins = 0; self.day_losses = 0
                         self.stats = {k: 0 for k in self.stats}
                         self.streak_losses = 0; self.tilt_until = 0
-                    self.log("NEW DAY RESET", notify=True, msg_ar="📅 يوم جديد (توقيت ليبيا)، تم تصفير الإحصائيات!")
+                    self.log("NEW DAY RESET", notify=True, msg_ar="📅 يوم جديد، تم تصفير الإحصائيات!")
                 
                 if self.day_signals >= self.CFG['max_daily_signals']:
                     time.sleep(600); continue
@@ -351,14 +371,18 @@ class QuotexMonsterBot:
                         found = True
                         break
                     
-                    # مهلة صغيرة جداً لمنع الحظر بسبب كثرة الأزواج
                     time.sleep(1) 
                 
                 if not found and self.scan_num % 5 == 0: 
-                    self.log(f"SCAN #{self.scan_num} | No Signals | Whales: {self.stats['whale_spotted']}")
+                    self.log(f"SCAN #{self.scan_num} | No Signals | Scanned: {self.stats['scanned']}")
                     
+                # إيقاف الرسائل المزعجة: يرسل تقرير فقط إذا كان هناك إشارات، أو رسالة مختصرة
                 if time.time() - self.report_time >= self.CFG['summary_every']:
-                    self._report(); self.report_time = time.time()
+                    if self.day_signals > 0:
+                        self._report()
+                    else:
+                        self.tg(f"📊 يعمل بنشاط | فحص: {self.stats['scanned']} زوج | مرفوضة: {self.stats['no_score']} | تذبذب: {self.stats['choppy_blocked']}")
+                    self.report_time = time.time()
                     
             except Exception as e: 
                 self.log(f"HUNTER ERR: {e}")
