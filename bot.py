@@ -1,16 +1,22 @@
-import time, pandas as pd, ta, requests, datetime, os, sys, numpy as np
+import time, pandas as pd, ta, requests, datetime, os, sys
+import yfinance as yf
+import warnings
 from zoneinfo import ZoneInfo
+
+# إخفاء تحذيرات yfinance المزعجة
+warnings.filterwarnings("ignore")
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-class QuotexProSignals:
+class QuotexSniperBot:
     """
-    بوت الإشارات السريع (Stochastic Edition)
-    ==========================================
-    - استراتيجية واحدة فقط: تقاطع الستوكاستك (Stochastic Cross).
-    - هدف الإشارة: 1 دقيقة.
-    - سرعة فحص عالية جداً لتوليد إشارات متكررة.
+    بوت القناص V12.0 (5-Min Triple Confirmation)
+    =============================================
+    - مصدر البيانات: Yahoo Finance (فوركس + كريبتو).
+    - الاستراتيجية: EMA 200 + Bollinger Bands + Stochastic.
+    - الفريم الزمني: 5 دقائق.
+    - التوقيت: إفريقيا/طرابلس (ليبيا).
     """
     
     def __init__(self):
@@ -18,41 +24,51 @@ class QuotexProSignals:
         self.tg_chat = os.environ.get('CHAT_ID')
         
         if not self.tg_token or not self.tg_chat:
-            print("[FATAL ERROR] Missing TELEGRAM_TOKEN or CHAT_ID!")
+            print("[FATAL ERROR] Missing TELEGRAM_TOKEN or CHAT_ID in environment variables!")
             return
         
+        # التوقيت المحلي لليبيا
         self.TZ = ZoneInfo("Africa/Tripoli")
         
-        # قائمة كوتكس الرسمية (كريبتو + OTC)
-        self.QUOTEX_WHITELIST = {
+        # القاموس السحري: ربط رموز Yahoo Finance برموز منصة Quotex
+        self.SYMBOLS_MAP = {
             # ======= الكريبتو =======
-            'BTC/USDT': 'BTCUSD(t)', 'ETH/USDT': 'ETHUSD(t)', 
-            'BNB/USDT': 'BNBUSD(t)', 'SOL/USDT': 'SOLUSD(t)',
-            'XRP/USDT': 'XRPUSD(t)', 'DOGE/USDT': 'DOGEUSD(t)',
-            'LTC/USDT': 'LTCUSD(t)', 'ADA/USDT': 'ADAUSD(t)',
-            'MATIC/USDT': 'MATICUSD(t)', 'AVAX/USDT': 'AVAXUSD(t)',
-            'DOT/USDT': 'DOTUSD(t)', 'LINK/USDT': 'LINKUSD(t)',
-            
-            # ======= أزواج الـ OTC (تعمل في العطلات وتعطي حركة سريعة جداً) =======
-            'EUR/USD': 'EUR/USD OTC', 'GBP/USD': 'GBP/USD OTC', 
-            'USD/JPY': 'USD/JPY OTC', 'AUD/USD': 'AUD/USD OTC', 
-            'USD/CAD': 'USD/CAD OTC', 'EUR/GBP': 'EUR/GBP OTC', 
-            'NZD/USD': 'NZD/USD OTC', 'EUR/JPY': 'EUR/JPY OTC',
-            'GBP/JPY': 'GBP/JPY OTC', 'AUD/CAD': 'AUD/CAD OTC'
+            'BTC-USD': 'BTCUSD(t)', 
+            'ETH-USD': 'ETHUSD(t)', 
+            'BNB-USD': 'BNBUSD(t)', 
+            'SOL-USD': 'SOLUSD(t)',
+            'XRP-USD': 'XRPUSD(t)', 
+            'DOGE-USD': 'DOGEUSD(t)',
+            'ADA-USD': 'ADAUSD(t)',
+            # ======= الفوركس الحقيقي (يعمل من الإثنين للجمعة) =======
+            'EURUSD=X': 'EUR/USD', 
+            'GBPUSD=X': 'GBP/USD', 
+            'USDJPY=X': 'USD/JPY', 
+            'AUDUSD=X': 'AUD/USD', 
+            'USDCAD=X': 'USD/CAD', 
+            'EURGBP=X': 'EUR/GBP', 
+            'NZDUSD=X': 'NZD/USD', 
+            'EURJPY=X': 'EUR/JPY'
         }
         
-        # متغير لمنع إرسال إشارتين لنفس الزوج في نفس الدقيقة
+        self.yf_tickers_list = list(self.SYMBOLS_MAP.keys())
         self.last_signal_time = {}
-        self.stats = {'signals_sent': 0, 'scanned': 0}
+        self.stats = {'signals_sent': 0, 'scans': 0}
         self.report_time = time.time()
         
-        msg  = "⚡ *بوت الإشارات السريع*\n"
+        # إعدادات الاستراتيجية
+        self.TIMEFRAME = '5m'
+        self.COOLDOWN_SEC = 300 # منع إرسال إشارة لنفس الزوج قبل مرور 5 دقائق
+        
+        msg  = "🎯 *بوت القناص (5 دقائق)*\n"
         msg += "━━━━━━━━━━━━━━━━\n"
-        msg += f"🕐 التوقيت: ليبيا (GMT+2)\n"
-        msg += f"📋 مراقبة {len(self.QUOTEX_WHITELIST)} زوج (كريبتو + OTC)\n"
-        msg += "🎯 الاستراتيجية: `Stochastic Cross (14,3,3)`\n"
-        msg += "⏱️ المدة: `1 دقيقة` لجميع الإشارات\n"
-        msg += "🚀 جاهز لاصطياد الإشارات..."
+        msg += "🕐 التوقيت: ليبيا (GMT+2)\n"
+        msg += f"📋 مراقبة {len(self.SYMBOLS_MAP)} زوج (فوركس + كريبتو)\n"
+        msg += "🧠 الاستراتيجية 3 أبعاد:\n"
+        msg += "1️⃣ `EMA 200` (للترند)\n"
+        msg += "2️⃣ `Bollinger Bands` (للتشبع)\n"
+        msg += "3️⃣ `Stochastic` (للزناد)\n"
+        msg += "🚀 جاهز للعمل باحترافية..."
         self.tg(msg)
 
     def _get_time(self):
@@ -62,134 +78,172 @@ class QuotexProSignals:
         try:
             requests.post(
                 f"https://api.telegram.org/bot{self.tg_token}/sendMessage",
-                data={'chat_id': self.tg_chat, 'text': msg, 'parse_mode': 'Markdown'}
+                data={'chat_id': self.tg_chat, 'text': msg, 'parse_mode': 'Markdown'},
+                timeout=5
             )
-        except: pass
+        except Exception as e:
+            print(f"[{self._get_time()}] TG Error: {e}")
 
     def log(self, msg):
         ts = self._get_time()
         print(f"[{ts}] {msg}") 
 
     # ================================================================
-    #                         جلب البيانات
+    #                            جلب البيانات
     # ================================================================
     
-    def _fetch_ohlcv(self, sym, limit=60):
-        base, quote = sym.split('/')
-        url = "https://min-api.cryptocompare.com/data/v2/histominute"
-        params = {'fsym': base, 'tsym': quote, 'limit': limit}
+    def _fetch_all_data(self):
+        """جلب بيانات جميع العملات دفعة واحدة لتجنب حظر الـ API"""
         try:
-            r = requests.get(url, params=params, timeout=5)
-            d = r.json()
-            if d.get('Response') == 'Success':
-                raw = d.get('Data', {}).get('Data', [])
-                formatted = [[c['time']*1000, c['open'], c['high'], c['low'], c['close'], c['volumeto']] for c in raw]
-                df = pd.DataFrame(formatted, columns=['t','o','h','l','c','v'])
-                if len(df) >= limit: return df
-        except: pass
-        return None
-
-    # ================================================================
-    #       🎯 الاستراتيجية: تقاطع الستوكاستك (Stochastic)
-    # ================================================================
-    
-    def _check_stochastic(self, sym):
-        df = self._fetch_ohlcv(sym, 60)
-        if df is None: return None
-        
-        # حساب مؤشر الستوكاستك
-        stoch = ta.momentum.StochasticOscillator(
-            high=df['h'], low=df['l'], close=df['c'], 
-            window=14, smooth_window=3
-        )
-        df['k'] = stoch.stoch()
-        df['d'] = stoch.stoch_signal()
-        
-        cur_k = df['k'].iloc[-1]
-        cur_d = df['d'].iloc[-1]
-        prev_k = df['k'].iloc[-2]
-        prev_d = df['d'].iloc[-2]
-        
-        if pd.isna(cur_k) or pd.isna(cur_d) or pd.isna(prev_k) or pd.isna(prev_d):
+            # نجلب بيانات يومين بفريم 5 دقائق لكل الأزواج
+            data = yf.download(
+                tickers=self.yf_tickers_list, 
+                period='2d', 
+                interval=self.TIMEFRAME, 
+                group_by='ticker',
+                progress=False,
+                threads=True
+            )
+            return data
+        except Exception as e:
+            self.log(f"Data Fetch Error: {e}")
             return None
-            
-        # 🟢 إشارة شراء (CALL): تقاطع K للأعلى فوق D في منطقة التشبع البيعي (أقل من 30)
-        if prev_k <= prev_d and cur_k > cur_d and cur_k < 30:
-            return 'CALL'
-            
-        # 🔴 إشارة بيع (PUT): تقاطع K للأسفل تحت D في منطقة التشبع الشرائي (أعلى من 70)
-        if prev_k >= prev_d and cur_k < cur_d and cur_k > 70:
-            return 'PUT'
-            
-        return None
 
     # ================================================================
-    #                      إرسال الإشارة
+    #                  🎯 استراتيجية القناص (Triple Confirmation)
     # ================================================================
-
-    def _send_signal(self, b_sym, q_sym, direction):
-        # جلب السعر الحالي
-        base, quote = b_sym.split('/')
-        try:
-            r = requests.get(f"https://min-api.cryptocompare.com/data/price?fsym={base}&tsyms={quote}", timeout=5)
-            price = r.json().get(quote, 0)
-        except: price = 0
+    
+    def _analyze_symbol(self, df):
+        if df is None or len(df) < 200:
+            return None, 0
+            
+        # تنظيف البيانات وتوحيد أسماء الأعمدة
+        df = df.copy()
+        df.dropna(inplace=True)
         
+        # 1. حساب المتوسط المتحرك (EMA 200) لتحديد الاتجاه العام
+        df['ema200'] = ta.trend.ema_indicator(df['Close'], window=200)
+        
+        # 2. حساب البولينجر باندز (Bollinger Bands 20, 2) لمعرفة مناطق الانعكاس
+        bb = ta.volatility.BollingerBands(close=df['Close'], window=20, window_dev=2)
+        df['bb_upper'] = bb.bollinger_hband()
+        df['bb_lower'] = bb.bollinger_lband()
+        
+        # 3. حساب الستوكاستيك (Stochastic 14, 3, 3) كلحظة دخول
+        stoch = ta.momentum.StochasticOscillator(high=df['High'], low=df['Low'], close=df['Close'], window=14, smooth_window=3)
+        df['stoch_k'] = stoch.stoch()
+        df['stoch_d'] = stoch.stoch_signal()
+        
+        cur = df.iloc[-1]
+        prev = df.iloc[-2]
+        price = cur['Close']
+        
+        if pd.isna(cur['ema200']) or pd.isna(cur['bb_upper']) or pd.isna(cur['stoch_k']):
+            return None, price
+
+        # ==========================================
+        # 🟢 شرط الشراء (CALL)
+        # ==========================================
+        # 1. الترند صاعد (السعر فوق EMA 200)
+        uptrend = price > cur['ema200']
+        # 2. السعر ضرب الخط السفلي للبولينجر (تشبع بيعي قوي)
+        bb_touch_lower = cur['Low'] <= cur['bb_lower'] or prev['Low'] <= prev['bb_lower']
+        # 3. الستوكاستيك تحت 20 وحصل تقاطع للأعلى
+        stoch_cross_up = (prev['stoch_k'] <= prev['stoch_d']) and (cur['stoch_k'] > cur['stoch_d']) and (cur['stoch_k'] < 20)
+        
+        if uptrend and bb_touch_lower and stoch_cross_up:
+            return 'CALL', price
+            
+        # ==========================================
+        # 🔴 شرط البيع (PUT)
+        # ==========================================
+        # 1. الترند هابط (السعر تحت EMA 200)
+        downtrend = price < cur['ema200']
+        # 2. السعر ضرب الخط العلوي للبولينجر (تشبع شرائي قوي)
+        bb_touch_upper = cur['High'] >= cur['bb_upper'] or prev['High'] >= prev['bb_upper']
+        # 3. الستوكاستيك فوق 80 وحصل تقاطع للأسفل
+        stoch_cross_down = (prev['stoch_k'] >= prev['stoch_d']) and (cur['stoch_k'] < cur['stoch_d']) and (cur['stoch_k'] > 80)
+        
+        if downtrend and bb_touch_upper and stoch_cross_down:
+            return 'PUT', price
+            
+        return None, price
+
+    # ================================================================
+    #                            إرسال الإشارة
+    # ================================================================
+
+    def _send_signal(self, yf_sym, qx_sym, direction, price):
         self.stats['signals_sent'] += 1
-        self.last_signal_time[b_sym] = time.time()
+        self.last_signal_time[yf_sym] = time.time()
         
         icon = "🟢" if direction == 'CALL' else "🔴"
         now_libya = datetime.datetime.now(self.TZ)
-        expiry_time = now_libya + datetime.timedelta(minutes=1)
+        expiry_time = now_libya + datetime.timedelta(minutes=5)
         
-        msg  = f"🚀 *إشارة دقيقة*\n"
-        msg += f"🪙 الزوج: *{q_sym}*\n"
+        msg  = f"🎯 *إشارة قنص مؤكدة*\n"
+        msg += f"━━━━━━━━━━━━━━━━\n"
+        msg += f"🪙 الزوج: *{qx_sym}*\n"
         msg += f"📊 الاتجاه: *{direction}* {icon}\n"
-        msg += f"⏱️ الانتهاء: *{expiry_time.strftime('%H:%M:%S')}* (1 دقيقة)\n"
-        msg += f"💵 السعر: `{price}`\n"
-        msg += f"🧠 الاستراتيجية: `Stochastic Cross`"
+        msg += f"⏱️ الانتهاء: *{expiry_time.strftime('%H:%M:%S')}* (5 دقائق)\n"
+        msg += f"💵 السعر: `{price:.5f}`\n"
+        msg += f"🧠 الاستراتيجية: `EMA200 + BB + Stoch`\n"
+        msg += f"━━━━━━━━━━━━━━━━"
         
         self.tg(msg)
-        self.log(f"SIGNAL: {q_sym} {direction} @ {price}")
+        self.log(f"SIGNAL FIRED: {qx_sym} {direction} @ {price:.5f}")
 
     # ================================================================
-    #                         التشغيل
+    #                            التشغيل الرئيسي
     # ================================================================
     
     def run(self):
-        self.log("HUNTER STARTED - Scanning fast...")
+        self.log("SNIPER STARTED - Fetching bulk data every 60 seconds...")
         
         while True:
             try:
-                for b_sym, q_sym in self.QUOTEX_WHITELIST.items():
-                    self.stats['scanned'] += 1
-                    
-                    # منع إرسال إشارتين لنفس الزوج في أقل من 120 ثانية (2 دقيقة)
-                    if b_sym in self.last_signal_time:
-                        if time.time() - self.last_signal_time[b_sym] < 120:
-                            continue
-                    
-                    direction = self._check_stochastic(b_sym)
-                    
-                    if direction:
-                        self._send_signal(b_sym, q_sym, direction)
-                    
-                    # سرعة فائقة للفحص (نصف ثانية بين كل زوج)
-                    time.sleep(0.5) 
+                self.stats['scans'] += 1
                 
-                # تقرير صامت كل نصف ساعة لمعرفة أن البوت يعمل
-                if time.time() - self.report_time >= 1800:
-                    self.tg(f"📊 البوت يعمل | إشارات اليوم: {self.stats['signals_sent']}")
+                # جلب بيانات كل العملات في طلب واحد سريع
+                all_data = self._fetch_all_data()
+                
+                if all_data is not None and not all_data.empty:
+                    for yf_sym in self.yf_tickers_list:
+                        
+                        # استخراج بيانات الزوج المحدد من الجدول الضخم
+                        if len(self.yf_tickers_list) > 1:
+                            df_symbol = all_data[yf_sym]
+                        else:
+                            df_symbol = all_data
+                            
+                        qx_sym = self.SYMBOLS_MAP[yf_sym]
+                        
+                        # حماية الـ Cooldown (منع إرسال إشارة لنفس الزوج قبل 5 دقائق)
+                        if yf_sym in self.last_signal_time:
+                            if time.time() - self.last_signal_time[yf_sym] < self.COOLDOWN_SEC:
+                                continue
+                                
+                        direction, price = self._analyze_symbol(df_symbol)
+                        
+                        if direction:
+                            self._send_signal(yf_sym, qx_sym, direction, price)
+                else:
+                    self.log("No data received from Yahoo Finance. Retrying...")
+
+                # تقرير صامت كل ساعة
+                if time.time() - self.report_time >= 3600:
+                    self.tg(f"📊 القناص يعمل | إشارات اليوم: {self.stats['signals_sent']}")
                     self.report_time = time.time()
                     
             except Exception as e: 
-                self.log(f"ERR: {e}")
+                self.log(f"MAIN LOOP ERR: {e}")
                 time.sleep(10)
             
-            # إعادة تشغيل الدورة فوراً
-            time.sleep(5) 
+            # انتظار دقيقة كاملة قبل سحب شمعة جديدة (لأن الفريم 5 دقائق، لا داعي للضغط)
+            self.log("Cycle complete. Waiting 60 seconds...")
+            time.sleep(60) 
 
 if __name__ == "__main__":
-    bot = QuotexProSignals()
+    bot = QuotexSniperBot()
     if bot.tg_token:
         bot.run()
