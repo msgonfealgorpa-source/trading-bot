@@ -1,4 +1,4 @@
-import ccxt, time, pandas as pd, ta, requests, datetime, os, sys, threading
+import time, pandas as pd, ta, requests, datetime, os, sys, threading, numpy as np
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -7,9 +7,8 @@ class QuotexMonsterBot:
     """
     بوت الوحش V11.0 (Quotex Binary Signals Edition)
     =================================================
-    - مصدر البيانات: Binance API (Real-time)
+    - مصدر البيانات: CryptoCompare API (مجاني، بلا حجب جغرافي، يعمل على أي سيرفر)
     - الهدف: إشارات ثنائية (CALL/PUT) لمنصة كوتكس.
-    - ميزة جديدة: التحقق الذاتي من دقة الإشارة لتفعيل Anti-Tilt.
     """
     
     def __init__(self):
@@ -20,18 +19,14 @@ class QuotexMonsterBot:
             print("[FATAL ERROR] Missing TELEGRAM_TOKEN or CHAT_ID!")
             return
         
-        # ربط بـ Binance بدون مفاتيح (لأننا نقرأ البيانات فقط)
-        self.exchange = ccxt.bybit({'enableRateLimit': True})
-        
-        # قائمة الأزواج المدعومة في كوتكس (مقسمة: بينانس -> كوتكس)
+        # قائمة الأزواج المدعومة في كوتكس
         self.QUOTEX_WHITELIST = {
             'BTC/USDT': 'BTCUSD(t)', 'ETH/USDT': 'ETHUSD(t)', 
             'BNB/USDT': 'BNBUSD(t)', 'SOL/USDT': 'SOLUSD(t)',
             'XRP/USDT': 'XRPUSD(t)', 'DOGE/USDT': 'DOGEUSD(t)',
             'LTC/USDT': 'LTCUSD(t)', 'ADA/USDT': 'ADAUSD(t)',
             'MATIC/USDT': 'MATICUSD(t)', 'AVAX/USDT': 'AVAXUSD(t)',
-            'DOT/USDT': 'DOTUSD(t)', 'LINK/USDT': 'LINKUSD(t)',
-            'EUR/USDT': 'EURUSD(t)', 'GBP/USDT': 'GBPUSD(t)'
+            'DOT/USDT': 'DOTUSD(t)', 'LINK/USDT': 'LINKUSD(t)'
         }
         
         self.trade_lock = threading.Lock()
@@ -40,7 +35,7 @@ class QuotexMonsterBot:
         self.scan_num = 0
         self.report_time = time.time()
         self.last_signal_time = 0
-        self.cooldown_sec = 120 # مهلة بين الإشارات لتجنب التشتيت
+        self.cooldown_sec = 120 
         
         self.streak_losses = 0
         self.tilt_until = 0
@@ -56,28 +51,20 @@ class QuotexMonsterBot:
             'score_gap': 2,
             'loop_sec': 15,
             'summary_every': 1800,
-            # ======= إعدادات الحماية =======
             'tilt_after_losses': 3,
             'tilt_duration_min': 45,
-            # ======= إعدادات رادار الحيتان =======
             'whale_level_1': 1.5,
             'whale_level_2': 3.0,
             'whale_level_3': 5.0,
-            # ======= فلتر التذبذب (Bollinger Width) =======
             'min_bb_width_pct': 0.1 
         }
         
-        self.tg("🔄 جاري التشغيل وربط بينانس...")
-        try:
-            self.exchange.load_markets()
-            self.tg("✅ تم الربط بنجاح!")
-        except Exception as e:
-            self.tg(f"❌ فشل الربط: {e}")
-            return
+        self.tg("🔄 جاري التشغيل...")
+        self.tg("✅ تم الربط بـ CryptoCompare (بلا حجب جغرافي)!")
 
         msg  = "🐋 *بوت الوحش V11.0 (Quotex Edition)*\n"
         msg += "━━━━━━━━━━━━━━━━\n"
-        msg += "📡 مصدر البيانات: Binance Real-time\n"
+        msg += "📡 مصدر البيانات: CryptoCompare Global\n"
         msg += "🎯 الهدف: إشارات كوتكس (Binary)\n"
         msg += "🚫 فلتر التذبذب (Chop Filter) مفعّل\n"
         msg += "🧠 تحقق ذاتي (Auto Anti-Tilt)\n"
@@ -99,47 +86,78 @@ class QuotexMonsterBot:
             self.tg(msg_ar if msg_ar else msg_en)
 
     # ================================================================
-    #                         API & DATA
+    #              API & DATA (CryptoCompare - No Geo-Block)
     # ================================================================
     
-    def _ticker(self, sym): 
-        try: return self.exchange.fetch_ticker(sym)
-        except: return None
-
-    def _df(self, sym, tf, limit=60):
+    def _fetch_ticker(self, sym):
+        """يجلب السعر الحالي فقط"""
+        base, quote = sym.split('/')
+        url = f"https://min-api.cryptocompare.com/data/price?fsym={base}&tsyms={quote}"
         try:
-            data = self.exchange.fetch_ohlcv(sym, tf, limit=limit)
-            if not data or len(data) < limit: return None
-            return pd.DataFrame(data, columns=['t','o','h','l','c','v'])
-        except: return None
+            r = requests.get(url, timeout=5)
+            d = r.json()
+            price = d.get(quote, 0)
+            if price > 0: return {'last': price}
+        except: pass
+        return None
+
+    def _fetch_ohlcv(self, sym, limit=300):
+        """يجلب الشموع الخام من CryptoCompare"""
+        base, quote = sym.split('/')
+        url = "https://min-api.cryptocompare.com/data/v2/histominute"
+        params = {'fsym': base, 'tsym': quote, 'limit': limit}
+        try:
+            r = requests.get(url, params=params, timeout=10)
+            d = r.json()
+            if d.get('Response') == 'Success':
+                raw = d.get('Data', {}).get('Data', [])
+                formatted = [[c['time']*1000, c['open'], c['high'], c['low'], c['close'], c['volumeto']] for c in raw]
+                df = pd.DataFrame(formatted, columns=['t','o','h','l','c','v'])
+                if len(df) >= limit: return df
+        except: pass
+        return None
+
+    def _get_data(self, sym):
+        """يجلب دفعة واحدة ويقسمها بذكاء لـ 1 دقيقة و 5 دقائق"""
+        df_raw = self._fetch_ohlcv(sym, 300)
+        if df_raw is None: return None, None
+        
+        df_1m = df_raw.iloc[-60:] 
+        
+        # تحويل ذكي لفريم 5 دقائق بدون إرسال طلب API إضافي
+        try:
+            df_raw['ts'] = pd.to_datetime(df_raw['t'], unit='ms')
+            df_5m = df_raw.set_index('ts').resample('5min').agg({
+                'o': 'first', 'h': 'max', 'l': 'min', 'c': 'last', 'v': 'sum'
+            }).dropna().reset_index()
+            df_5m['t'] = df_5m['index'].astype(np.int64) // 10**6
+            df_5m = df_5m.iloc[-60:]
+        except:
+            df_5m = None
+            
+        return df_1m, df_5m
     
     # ================================================================
-    #     🧠 استراتيجية الثنائيات + رادار الحيتان + فلتر التذبذب
+    #     🧠 الاستراتيجية + رادار الحيتان + فلتر التذبذب
     # ================================================================
     
     def _score_binary(self, sym):
-        # نجلب فريم 1 دقيقة و 5 دقائق لضمان الدقة
-        df_1m = self._df(sym, '1m', 50)
-        df_5m = self._df(sym, '5m', 50)
+        df_1m, df_5m = self._get_data(sym)
         if df_1m is None or df_5m is None: return None, "No Data", 0, False
         
-        # مؤشرات الفريم الصغير (1 دقيقة)
         df_1m['ema9'] = ta.trend.ema_indicator(df_1m['c'], 9)
         df_1m['ema21'] = ta.trend.ema_indicator(df_1m['c'], 21)
         df_1m['rsi'] = ta.momentum.rsi(df_1m['c'], 14)
         df_1m['macd'] = ta.trend.macd_diff(df_1m['c'])
         df_1m['vm'] = df_1m['v'].rolling(20).mean()
         
-        # مؤشرات الفريم الكبير (5 دقائق) - لتحديد الاتجاه العام
         df_5m['ema50'] = ta.trend.ema_indicator(df_5m['c'], 50)
         
-        # فلتر التذبذب (Bollinger Bands Width) على فريم 5 دقائق
         bb = ta.volatility.BollingerBands(df_5m['c'], 20, 2)
         df_5m['bb_width'] = (bb.bollinger_hband() - bb.bollinger_lband()) / bb.bollinger_mavg() * 100
         
         cur = df_1m.iloc[-1]; prev = df_1m.iloc[-2]; cur_5m = df_5m.iloc[-1]
         
-        # 🚫 فلتر التذبذب: منع الإشارات إذا كان السوق جانبي جداً
         if not pd.isna(cur_5m['bb_width']) and cur_5m['bb_width'] < self.CFG['min_bb_width_pct']:
             self.stats['choppy_blocked'] += 1
             return None, "Choppy Market", 0, False
@@ -147,12 +165,10 @@ class QuotexMonsterBot:
         L, S = 0, 0; LR, SR = [], []
         is_whale = False
         
-        # 1. الاتجاه العام (5m EMA 50) - شرط أساسي قوي
         if not pd.isna(cur_5m['ema50']):
             if cur_5m['c'] > cur_5m['ema50']: L += 2; LR.append("5M_UP")
             else: S += 2; SR.append("5M_DN")
         
-        # 2. تقاطع EMA (1m)
         ema_ok = all(not pd.isna(x) for x in [cur['ema9'], cur['ema21'], prev['ema9'], prev['ema21']])
         if ema_ok:
             if prev['ema9'] <= prev['ema21'] and cur['ema9'] > cur['ema21']: L += 3; LR.append("CROSS_UP")
@@ -160,25 +176,21 @@ class QuotexMonsterBot:
             elif cur['ema9'] > cur['ema21']: L += 1
             else: S += 1
             
-        # 3. RSI (1m)
         if not pd.isna(cur['rsi']):
             if cur['rsi'] < 30: L += 2; LR.append(f"RSI_{cur['rsi']:.0f}")
             elif cur['rsi'] > 70: S += 2; SR.append(f"RSI_{cur['rsi']:.0f}")
             elif 40 <= cur['rsi'] < 50: L += 1
             elif 50 < cur['rsi'] <= 60: S += 1
             
-        # 4. MACD (1m)
         if not pd.isna(cur['macd']) and not pd.isna(prev['macd']):
             if cur['macd'] > 0 and cur['macd'] > prev['macd']: L += 1
             elif cur['macd'] < 0 and cur['macd'] < prev['macd']: S += 1
             
-        # 5. شمعة قوية (1m)
         body = abs(cur['c'] - cur['o']); rng = cur['h'] - cur['l']
         if rng > 0 and (body / rng) > 0.6:
             if cur['c'] > cur['o']: L += 1; LR.append("BULL_CAND")
             else: S += 1; SR.append("BEAR_CAND")
         
-        # ===== 🐋 6. رادار الحيتان (Volume Spike) =====
         if not pd.isna(cur['vm']) and cur['vm'] > 0:
             vol_ratio = cur['v'] / cur['vm']
             
@@ -198,9 +210,8 @@ class QuotexMonsterBot:
         
         min_pts = self.CFG['min_score']; gap = self.CFG['score_gap']
         
-        # تحديد المدة المقترحة بناءً على سبب الدخول
-        duration = 5 # الافتراضي
-        if is_whale: duration = 1 # حركة الحوت سريعة
+        duration = 5
+        if is_whale: duration = 1
         if "CROSS" in str(LR) or "CROSS" in str(SR): duration = 3
         
         if L >= min_pts and (L - S) >= gap: 
@@ -217,7 +228,7 @@ class QuotexMonsterBot:
 
     def _send_signal(self, b_sym, q_sym, direction, reason, duration, is_whale):
         price = 0
-        ticker = self._ticker(b_sym)
+        ticker = self._fetch_ticker(b_sym)
         if ticker: price = ticker['last']
         
         self.stats['signals_sent'] += 1
@@ -239,14 +250,11 @@ class QuotexMonsterBot:
         msg += "━━━━━━━━━━━━━━━━"
         
         self.tg(msg)
-        
-        # 🔥 بدء خيط التحقق الذاتي في الخلفية
         threading.Thread(target=self._validate_signal_outcome, args=(b_sym, direction, price, duration), daemon=True).start()
 
     def _validate_signal_outcome(self, sym, direction, entry_price, duration):
-        """خيط خلفي ينتظر انتهاء مدة الإشارة ثم يفحص النتيجة لتغذية نظام Anti-Tilt"""
-        time.sleep(duration * 60) # انتظر مدة الصفقة
-        ticker = self._ticker(sym)
+        time.sleep(duration * 60)
+        ticker = self._fetch_ticker(sym)
         if not ticker or entry_price == 0: return
         
         current_price = ticker['last']
@@ -292,22 +300,18 @@ class QuotexMonsterBot:
                         self.streak_losses = 0; self.tilt_until = 0
                     self.log("NEW DAY RESET", notify=True, msg_ar="📅 يوم جديد، تم تصفير الإحصائيات!")
                 
-                # التحقق من الحد اليومي
                 if self.day_signals >= self.CFG['max_daily_signals']:
                     time.sleep(600); continue
                 
-                # التحقق من نظام Anti-Tilt
                 if time.time() < self.tilt_until:
                     time.sleep(60); continue
                 
-                # التحقق من مهلة التبريد بين الإشارات
                 if time.time() - self.last_signal_time < self.cooldown_sec:
                     time.sleep(10); continue
                 
                 self.scan_num += 1
                 found = False
                 
-                # المرور على القائمة البيضاء فقط
                 for b_sym, q_sym in self.QUOTEX_WHITELIST.items():
                     self.stats['scanned'] += 1
                     
@@ -317,7 +321,7 @@ class QuotexMonsterBot:
                         self.log(f"SIGNAL FOUND: {q_sym} {direction} | {reason}")
                         self._send_signal(b_sym, q_sym, direction, reason, duration, is_whale)
                         found = True
-                        break # أرسل إشارة واحدة فقط في الدورة لتجنب التشتيت
+                        break
                 
                 if not found and self.scan_num % 10 == 0: 
                     self.log(f"SCAN #{self.scan_num} | No Signals | Whales: {self.stats['whale_spotted']}")
