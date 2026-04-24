@@ -21,7 +21,7 @@ class QuotexMonsterBot:
             return
         
         # ربط بـ Binance بدون مفاتيح (لأننا نقرأ البيانات فقط)
-        self.exchange = ccxt.binance({'enableRateLimit': True})
+        self.exchange = ccxt.bybit({'enableRateLimit': True})
         
         # قائمة الأزواج المدعومة في كوتكس (مقسمة: بينانس -> كوتكس)
         self.QUOTEX_WHITELIST = {
