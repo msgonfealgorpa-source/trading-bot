@@ -1,14 +1,16 @@
 import time, pandas as pd, ta, requests, datetime, os, sys, threading, numpy as np
+from zoneinfo import ZoneInfo # مكتبة التوقيت المدمجة (لا تحتاج تثبيت)
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 class QuotexMonsterBot:
     """
-    بوت الوحش V11.0 (Quotex Binary Signals Edition)
-    =================================================
-    - مصدر البيانات: CryptoCompare API (مجاني، بلا حجب جغرافي، يعمل على أي سيرفر)
-    - الهدف: إشارات ثنائية (CALL/PUT) لمنصة كوتكس.
+    بوت الوحش V11.0 (Quotex Pro Edition)
+    ======================================
+    - التوقيت: ليبيا (GMT+2)
+    - الأزواج: كريبتو + فوركس + OTC (للويكاند)
+    - مصدر البيانات: CryptoCompare (بلا حجب جغرافي)
     """
     
     def __init__(self):
@@ -16,22 +18,35 @@ class QuotexMonsterBot:
         self.tg_chat = os.environ.get('CHAT_ID')
         
         if not self.tg_token or not self.tg_chat:
-            print("[FATAL ERROR] Missing TELEGRAM_TOKEN or CHAT_ID!")
+            print("[FATAL ERROR] Missing TELEGRAM_TOKEN or CHAT_ID in .env!")
             return
         
-        # قائمة الأزواج المدعومة في كوتكس
+        # ضبط التوقيت لليبيا
+        self.TZ = ZoneInfo("Africa/Tripoli")
+        
+        # قائمة الأزواج الشاملة (كريبتو + فوركس + OTC)
         self.QUOTEX_WHITELIST = {
+            # ======= العملات الرقمية (Crypto) =======
             'BTC/USDT': 'BTCUSD(t)', 'ETH/USDT': 'ETHUSD(t)', 
             'BNB/USDT': 'BNBUSD(t)', 'SOL/USDT': 'SOLUSD(t)',
             'XRP/USDT': 'XRPUSD(t)', 'DOGE/USDT': 'DOGEUSD(t)',
             'LTC/USDT': 'LTCUSD(t)', 'ADA/USDT': 'ADAUSD(t)',
             'MATIC/USDT': 'MATICUSD(t)', 'AVAX/USDT': 'AVAXUSD(t)',
-            'DOT/USDT': 'DOTUSD(t)', 'LINK/USDT': 'LINKUSD(t)'
+            'DOT/USDT': 'DOTUSD(t)', 'LINK/USDT': 'LINKUSD(t)',
+            
+            # ======= أزواج الفوركس والـ OTC (للعطلات) =======
+            'EUR/USD': 'EUR/USD OTC', 'GBP/USD': 'GBP/USD OTC', 
+            'USD/JPY': 'USD/JPY OTC', 'AUD/USD': 'AUD/USD OTC', 
+            'USD/CAD': 'USD/CAD OTC', 'EUR/GBP': 'EUR/GBP OTC', 
+            'NZD/USD': 'NZD/USD OTC', 'EUR/JPY': 'EUR/JPY OTC',
+            'GBP/JPY': 'GBP/JPY OTC', 'AUD/CAD': 'AUD/CAD OTC'
         }
         
         self.trade_lock = threading.Lock()
         self.day = None
         self.day_signals = 0
+        self.day_wins = 0
+        self.day_losses = 0
         self.scan_num = 0
         self.report_time = time.time()
         self.last_signal_time = 0
@@ -46,10 +61,10 @@ class QuotexMonsterBot:
         }
         
         self.CFG = {
-            'max_daily_signals': 15,
+            'max_daily_signals': 20,
             'min_score': 5,
             'score_gap': 2,
-            'loop_sec': 15,
+            'loop_sec': 25, # تم رفعها قليلاً لتناسب كثرة الأزواج
             'summary_every': 1800,
             'tilt_after_losses': 3,
             'tilt_duration_min': 45,
@@ -59,17 +74,18 @@ class QuotexMonsterBot:
             'min_bb_width_pct': 0.1 
         }
         
-        self.tg("🔄 جاري التشغيل...")
-        self.tg("✅ تم الربط بـ CryptoCompare (بلا حجب جغرافي)!")
-
-        msg  = "🐋 *بوت الوحش V11.0 (Quotex Edition)*\n"
+        self.tg("🔄 جاري التشغيل وضبط التوقيت...")
+        self.tg(f"✅ تم الربط بنجاح! التوقيت الحالي: {self._get_time()}")
+        
+        msg  = "🐋 *بوت الوحش V11.0 (Pro Edition)*\n"
         msg += "━━━━━━━━━━━━━━━━\n"
-        msg += "📡 مصدر البيانات: CryptoCompare Global\n"
-        msg += "🎯 الهدف: إشارات كوتكس (Binary)\n"
-        msg += "🚫 فلتر التذبذب (Chop Filter) مفعّل\n"
-        msg += "🧠 تحقق ذاتي (Auto Anti-Tilt)\n"
-        msg += f"📋 مراقبة {len(self.QUOTEX_WHITELIST)} زوج لكوتكس"
+        msg += f"🕐 التوقيت: ليبيا (GMT+2)\n"
+        msg += f"📋 مراقبة {len(self.QUOTEX_WHITELIST)} زوج (كريبتو + OTC)\n"
+        msg += "🚫 فلتر التذبذب + رادار الحيتان مفعّل"
         self.tg(msg)
+
+    def _get_time(self):
+        return datetime.datetime.now(self.TZ).strftime("%H:%M:%S")
 
     def tg(self, msg):
         try:
@@ -80,17 +96,16 @@ class QuotexMonsterBot:
         except: pass
 
     def log(self, msg_en, notify=False, msg_ar=None):
-        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        ts = self._get_time()
         print(f"[{ts}] {msg_en}") 
         if notify:
             self.tg(msg_ar if msg_ar else msg_en)
 
     # ================================================================
-    #              API & DATA (CryptoCompare - No Geo-Block)
+    #              API & DATA (CryptoCompare)
     # ================================================================
     
     def _fetch_ticker(self, sym):
-        """يجلب السعر الحالي فقط"""
         base, quote = sym.split('/')
         url = f"https://min-api.cryptocompare.com/data/price?fsym={base}&tsyms={quote}"
         try:
@@ -102,7 +117,6 @@ class QuotexMonsterBot:
         return None
 
     def _fetch_ohlcv(self, sym, limit=300):
-        """يجلب الشموع الخام من CryptoCompare"""
         base, quote = sym.split('/')
         url = "https://min-api.cryptocompare.com/data/v2/histominute"
         params = {'fsym': base, 'tsym': quote, 'limit': limit}
@@ -118,13 +132,11 @@ class QuotexMonsterBot:
         return None
 
     def _get_data(self, sym):
-        """يجلب دفعة واحدة ويقسمها بذكاء لـ 1 دقيقة و 5 دقائق"""
         df_raw = self._fetch_ohlcv(sym, 300)
         if df_raw is None: return None, None
         
         df_1m = df_raw.iloc[-60:] 
         
-        # تحويل ذكي لفريم 5 دقائق بدون إرسال طلب API إضافي
         try:
             df_raw['ts'] = pd.to_datetime(df_raw['t'], unit='ms')
             df_5m = df_raw.set_index('ts').resample('5min').agg({
@@ -153,6 +165,7 @@ class QuotexMonsterBot:
         
         df_5m['ema50'] = ta.trend.ema_indicator(df_5m['c'], 50)
         
+        # فلتر التذبذب (Bollinger Bands Width)
         bb = ta.volatility.BollingerBands(df_5m['c'], 20, 2)
         df_5m['bb_width'] = (bb.bollinger_hband() - bb.bollinger_lband()) / bb.bollinger_mavg() * 100
         
@@ -193,7 +206,6 @@ class QuotexMonsterBot:
         
         if not pd.isna(cur['vm']) and cur['vm'] > 0:
             vol_ratio = cur['v'] / cur['vm']
-            
             if vol_ratio >= self.CFG['whale_level_3']:
                 is_whale = True
                 if cur['c'] > cur['o']: L += 4; LR.append(f"🐋WHALE_{vol_ratio:.0f}x")
@@ -223,7 +235,7 @@ class QuotexMonsterBot:
         return None, f"L:{L} S:{S}", 0, False
 
     # ================================================================
-    #             إدارة الإشارات و التحقق الذاتي (Anti-Tilt)
+    #             إدارة الإشارات و التحقق الذاتي
     # ================================================================
 
     def _send_signal(self, b_sym, q_sym, direction, reason, duration, is_whale):
@@ -240,16 +252,25 @@ class QuotexMonsterBot:
         icon = "🟢" if direction == 'CALL' else "🔴"
         whale_tag = "\n🐋 تدفق حيتان قوي!" if is_whale else ""
         
+        # حساب وقت الانتهاء الدقيق بتوقيت ليبيا
+        now_libya = datetime.datetime.now(self.TZ)
+        expiry_time = now_libya + datetime.timedelta(minutes=duration)
+        expiry_str = expiry_time.strftime("%H:%M:%S")
+        time_now_str = now_libya.strftime("%H:%M:%S")
+        
         msg  = f"🚀 *إشارة كوتكس (Quotex)*\n"
         msg += "━━━━━━━━━━━━━━━━\n"
         msg += f"🪙 الزوج: *{q_sym}*\n"
         msg += f"📊 الاتجاه: *{direction}* {icon}\n"
-        msg += f"⏱️ المدة المقترحة: *{duration} دقائق*\n"
+        msg += f"⏱️ وقت الإشارة: {time_now_str}\n"
+        msg += f"⌛ وقت الانتهاء: *{expiry_str} (توقيت ليبيا)*\n"
         msg += f"💵 سعر الدخول: `{price}`\n"
         msg += f"🧠 الأسباب: `{reason}`{whale_tag}\n"
         msg += "━━━━━━━━━━━━━━━━"
         
         self.tg(msg)
+        
+        # تفعيل التحقق الذاتي في Thread منفصل
         threading.Thread(target=self._validate_signal_outcome, args=(b_sym, direction, price, duration), daemon=True).start()
 
     def _validate_signal_outcome(self, sym, direction, entry_price, duration):
@@ -262,24 +283,31 @@ class QuotexMonsterBot:
         if direction == 'CALL' and current_price > entry_price: is_win = True
         if direction == 'PUT' and current_price < entry_price: is_win = True
         
-        self.log(f"Validation: {sym} {direction} -> {'WIN' if is_win else 'LOSS'}")
+        self.log(f"Validation: {sym} {direction} -> {'WIN ✅' if is_win else 'LOSS ❌'}")
         
-        if not is_win:
-            self.streak_losses += 1
-            if self.streak_losses >= self.CFG['tilt_after_losses']:
-                self.tilt_until = time.time() + (self.CFG['tilt_duration_min'] * 60)
-                self.stats['tilt_triggered'] += 1
-                self.tg(f"🛡️ *Anti-Tilt مفعّل!* \nإيقاف الإشارات لمدة {self.CFG['tilt_duration_min']} دقيقة بسبب ضعف دقة السوق الحالي.")
-        else:
-            self.streak_losses = 0
+        with self.trade_lock:
+            if is_win:
+                self.day_wins += 1
+                self.streak_losses = 0
+            else:
+                self.day_losses += 1
+                self.streak_losses += 1
+                
+                if self.streak_losses >= self.CFG['tilt_after_losses']:
+                    self.tilt_until = time.time() + (self.CFG['tilt_duration_min'] * 60)
+                    self.stats['tilt_triggered'] += 1
+                    self.tg(f"🛡️ *Anti-Tilt مفعّل!* \nإيقاف الإشارات لمدة {self.CFG['tilt_duration_min']} دقيقة.")
 
     # ================================================================
     #                         MAIN RUN LOOP
     # ================================================================
     
     def _report(self):
-        msg  = "📊 *تقرير إشارات اليوم (Quotex)*\n"
+        total = self.day_wins + self.day_losses
+        win_rate = (self.day_wins / total * 100) if total > 0 else 0
+        msg  = "📊 *تقرير إشارات اليوم (توقيت ليبيا)*\n"
         msg += f"🚀 إشارات مُرسلة: {self.day_signals}/{self.CFG['max_daily_signals']}\n"
+        msg += f"🏆 نسبة الربح (Auto-Track): {win_rate:.1f}% ({self.day_wins}W / {self.day_losses}L)\n"
         msg += f"🐋 حيتان رصدت: {self.stats['whale_spotted']}\n"
         msg += f"🚫 تم حظر (تذبذب): {self.stats['choppy_blocked']}\n"
         msg += f"🛡️ مرات الإيقاف (Tilt): {self.stats['tilt_triggered']}"
@@ -287,18 +315,18 @@ class QuotexMonsterBot:
 
     def run(self):
         self.tg("🐋 *مسار الصيد بدأ!*")
-        self.log("HUNTER STARTED", notify=True, msg_ar="🏹 جاري مراقبة أزواج كوتكس!")
+        self.log("HUNTER STARTED", notify=True, msg_ar="🏹 جاري مراقبة الأسواق المحلية والعالمية!")
         
         while True:
             try:
-                today = datetime.date.today()
+                today = datetime.datetime.now(self.TZ).date()
                 if self.day != today:
                     if self.day is not None and self.day_signals > 0: self._report()
                     with self.trade_lock:
-                        self.day = today; self.day_signals = 0
+                        self.day = today; self.day_signals = 0; self.day_wins = 0; self.day_losses = 0
                         self.stats = {k: 0 for k in self.stats}
                         self.streak_losses = 0; self.tilt_until = 0
-                    self.log("NEW DAY RESET", notify=True, msg_ar="📅 يوم جديد، تم تصفير الإحصائيات!")
+                    self.log("NEW DAY RESET", notify=True, msg_ar="📅 يوم جديد (توقيت ليبيا)، تم تصفير الإحصائيات!")
                 
                 if self.day_signals >= self.CFG['max_daily_signals']:
                     time.sleep(600); continue
@@ -322,8 +350,11 @@ class QuotexMonsterBot:
                         self._send_signal(b_sym, q_sym, direction, reason, duration, is_whale)
                         found = True
                         break
+                    
+                    # مهلة صغيرة جداً لمنع الحظر بسبب كثرة الأزواج
+                    time.sleep(1) 
                 
-                if not found and self.scan_num % 10 == 0: 
+                if not found and self.scan_num % 5 == 0: 
                     self.log(f"SCAN #{self.scan_num} | No Signals | Whales: {self.stats['whale_spotted']}")
                     
                 if time.time() - self.report_time >= self.CFG['summary_every']:
