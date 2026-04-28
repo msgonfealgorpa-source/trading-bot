@@ -7,12 +7,9 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 class QuotexSniperBot:
     """
-    بوت القناص V14.2 (توازي بدون مكتبات + انقضاض الشمعة)
-    =======================================================
-    - استخدام ThreadPoolExecutor للتوازي (بدون aiohttp).
-    - توقيت ذكي: الفحص في آخر ثانيتين من الشمعة فقط.
-    - EMA 10/20 (أسرع استجابة).
-    - فلاتر برايس أكشن (شمعة الابتلاع).
+    بوت القناص V14.2 Final (تم إصلاح خلل المرحلة المتزامنة)
+    ==========================================================
+    - إذا دخلت المرحلة 1 والمرحلة 2 في نفس الشمعة يتم إطلاق الإشارة فوراً.
     """
 
     def __init__(self):
@@ -44,15 +41,10 @@ class QuotexSniperBot:
         self.COOLDOWN_SEC = 180
         self.STAGE_TIMEOUT = 900
 
-        msg  = "⚡ *بوت القناص V14.2 (توازي ذكي)*\n"
+        msg  = "⚡ *بوت القناص V14.2 (مُصلح)*\n"
         msg += "━━━━━━━━━━━━━━━━\n"
-        msg += "🚀 تم تفعيل التحديثات:\n"
-        msg += "• جلب بالتوازي (بدون مكتبات جديدة)\n"
-        msg += "• مؤشر EMA السريع\n"
-        msg += "• فلاتر شموع الابتلاع\n"
-        msg += "• الفحص الذكي (آخر ثانيتين)\n"
-        msg += "━━━━━━━━━━━━━━━━\n"
-        msg += "⏳ ينتظر بداية الشمعة القادمة..."
+        msg += "🔧 تم إصلاح خلل الإشارات المتزامنة\n"
+        msg += "🚀 جاهز للانقضاض..."
         self.tg(msg)
 
     def _get_time(self):
@@ -71,10 +63,6 @@ class QuotexSniperBot:
     def log(self, msg):
         ts = self._get_time()
         print(f"[{ts}] {msg}")
-
-    # ================================================================
-    #    جلب البيانات (توازي باستخدام ThreadPoolExecutor)
-    # ================================================================
 
     def _fetch_single(self, sym):
         base, quote = sym.split('/')
@@ -95,7 +83,6 @@ class QuotexSniperBot:
 
     def _get_all_data_parallel(self):
         data_dict = {}
-        # فتح 16 مسار مؤقت لجلب الأزواج في نفس الوقت
         with ThreadPoolExecutor(max_workers=16) as executor:
             futures = {executor.submit(self._fetch_single, sym): sym for sym in self.SYMBOLS_MAP.keys()}
             for future in as_completed(futures):
@@ -105,7 +92,7 @@ class QuotexSniperBot:
         return data_dict
 
     # ================================================================
-    #   استراتيجية V14.2 (EMA + Stoch + Engulfing)
+    #   استراتيجية V14.2 (النسخة المُصلحة)
     # ================================================================
 
     def _analyze_symbol(self, api_sym, df):
@@ -114,11 +101,9 @@ class QuotexSniperBot:
         try:
             df = df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'}).copy()
 
-            # 1. EMA (أسرع استجابة من SMA)
             df['ema10'] = ta.trend.ema_indicator(df['Close'], window=10)
             df['ema20'] = ta.trend.ema_indicator(df['Close'], window=20)
 
-            # 2. Stochastic
             stoch = ta.momentum.StochasticOscillator(high=df['High'], low=df['Low'], close=df['Close'], window=14, smooth_window=3)
             df['stoch_k'] = stoch.stoch()
 
@@ -135,34 +120,37 @@ class QuotexSniperBot:
 
             stoch_k_cur = cur['stoch_k']
 
-            # --- المرحلة 1: الستوكاستيك ---
+            # ==========================================
+            # المرحلة 1: الستوكاستيك (تم إزالة return)
+            # ==========================================
             if (stoch_k_cur > 70 and self.stage_memory.get(api_sym) != 'PUT_READY'):
                 self.stage_memory[api_sym] = 'PUT_READY'
                 self.stage_time[api_sym] = now
                 self.stats['stage1_hits'] += 1
-                return None, price, "🔴 مرحلة1 (ستوك فوق 70)"
+                # تم حذف return None عشان يكمل للمرحلة 2 لو التقاطع صار بنفس الشمعة
 
             if (stoch_k_cur < 30 and self.stage_memory.get(api_sym) != 'CALL_READY'):
                 self.stage_memory[api_sym] = 'CALL_READY'
                 self.stage_time[api_sym] = now
                 self.stats['stage1_hits'] += 1
-                return None, price, "🟢 مرحلة1 (ستوك تحت 30)"
+                # تم حذف return None عشان يكمل للمرحلة 2 لو التقاطع صار بنفس الشمعة
 
-            # --- المرحلة 2: التقاطع + برايس أكشن ---
+            # ==========================================
+            # المرحلة 2: التقاطع + برايس أكشن
+            # ==========================================
             current_stage = self.stage_memory.get(api_sym)
             
-            # حساب شمعة الابتلاع (Engulfing)
             is_bearish_engulfing = (cur['Close'] < cur['Open']) and (prev['Close'] > prev['Open']) and (cur['Open'] >= prev['Close']) and (cur['Close'] <= prev['Open'])
             is_bullish_engulfing = (cur['Close'] > cur['Open']) and (prev['Close'] < prev['Open']) and (cur['Open'] <= prev['Close']) and (cur['Close'] >= prev['Open'])
 
-            confirmation = "تقاطع عادي"
+            confirmation = "تقاطع EMA"
 
             if current_stage == 'PUT_READY':
                 cross_down = (prev['ema10'] >= prev['ema20']) and (cur['ema10'] < cur['ema20'])
                 if cross_down:
                     self.stage_memory[api_sym] = None
                     if is_bearish_engulfing:
-                        confirmation = "تقاطع + شمعة ابتلاعية 🔥"
+                        confirmation = "تقاطع + ابتلاعية 🔥"
                         self.stats['engulfing_hits'] += 1
                     return 'PUT', price, confirmation
                     
@@ -171,7 +159,7 @@ class QuotexSniperBot:
                 if cross_up:
                     self.stage_memory[api_sym] = None
                     if is_bullish_engulfing:
-                        confirmation = "تقاطع + شمعة ابتلاعية 🔥"
+                        confirmation = "تقاطع + ابتلاعية 🔥"
                         self.stats['engulfing_hits'] += 1
                     return 'CALL', price, confirmation
 
@@ -179,10 +167,6 @@ class QuotexSniperBot:
             return None, 0, ""
 
         return None, 0, ""
-
-    # ================================================================
-    #                            إرسال الإشارة
-    # ================================================================
 
     def _send_signal(self, api_sym, qx_sym, direction, price, confirmation):
         self.stats['signals_sent'] += 1
@@ -200,18 +184,13 @@ class QuotexSniperBot:
         msg += f"⏱️ الانتهاء: *{expiry_time.strftime('%H:%M:%S')}*\n"
         msg += f"💵 السعر: `{price:.{decimals}f}`\n"
         msg += f"🔑 التأكيد: *{confirmation}*\n"
-        msg += f"🧠 EMA10/20 + Stoch Filter\n"
         msg += f"━━━━━━━━━━━━━━━━"
         
         self.tg(msg)
         self.log(f">>>> SIGNAL: {qx_sym} {direction} | {confirmation}")
 
-    # ================================================================
-    #               التشغيل الرئيسي (التوقيت الذكي)
-    # ================================================================
-
     def run(self):
-        self.log("SNIPER V14.2 STARTED - Smart Clock Synced (No Extra Libs)")
+        self.log("SNIPER V14.2 FINAL STARTED - Bug Fixed")
         self.log("========================================")
 
         while True:
@@ -219,24 +198,17 @@ class QuotexSniperBot:
                 now_libya = datetime.datetime.now(self.TZ)
                 current_second = now_libya.second
                 
-                # ==========================================
-                # 🧠 التوقيت الذكي (فقط بالموارد الأصلية)
-                # ==========================================
                 sec_left = 60 - current_second - (now_libya.microsecond / 1_000_000)
 
                 if sec_left > 2:
-                    # البوت ينام حتى يبقى ثانيتين على نهاية الشمعة
                     self.log(f"⏳ انتظار ذكي... باقي {int(sec_left)-2} ثانية.")
                     time.sleep(sec_left - 2)
                     continue
 
-                # نحن الآن في الثواني (58 أو 59) - وقت الانقضاض!
                 self.log("🔥 [الثانية 58] جلب البيانات بالتوازي وتحليل الأزواج...")
                 
-                # 1. جلب كل البيانات بالتوازي (بدون مكتبات جديدة)
                 data_dict = self._get_all_data_parallel()
                 
-                # 2. تحليل الإشارات
                 for api_sym, df in data_dict.items():
                     if api_sym in self.last_signal_time:
                         if time.time() - self.last_signal_time[api_sym] < self.COOLDOWN_SEC:
@@ -248,19 +220,17 @@ class QuotexSniperBot:
                         qx_sym = self.SYMBOLS_MAP[api_sym]
                         self._send_signal(api_sym, qx_sym, direction, price, confirmation)
 
-                self.log("✅ تم فحص الشمعة - انتظار الشمعة القادمة.")
+                self.log("✅ تم فحص الشمعة.")
 
-                # تقرير ساعة
                 if time.time() - self.report_time >= 3600:
                     self.tg(
                         f"📊 *تقرير V14.2 (ساعة)*\n━━━━━━━━━━━━━━━━\n"
-                        f"📍 مراحل أولى (ستوك): {self.stats['stage1_hits']}\n"
+                        f"📍 مراحل أولى: {self.stats['stage1_hits']}\n"
                         f"🔥 شموع ابتلاعية: {self.stats['engulfing_hits']}\n"
                         f"🎯 إشارات نهائية: {self.stats['signals_sent']}\n━━━━━━━━━━━━━━━━"
                     )
                     self.report_time = time.time()
 
-                # انتظار 3 ثوان لتجنب إعادة فحص نفس الشمعة
                 time.sleep(3)
 
             except Exception as e:
