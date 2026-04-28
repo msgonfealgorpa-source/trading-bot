@@ -7,9 +7,10 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 class QuotexSniperBot:
     """
-    بوت القناص V14.2 Final (تم إصلاح خلل المرحلة المتزامنة)
-    ==========================================================
-    - إذا دخلت المرحلة 1 والمرحلة 2 في نفس الشمعة يتم إطلاق الإشارة فوراً.
+    بوت القناص V15 (OTC Forex Matches)
+    =====================================
+    - تم استبعاد الكريبتو لأن شموع OTC الخاصة بهم وهمية ولا تتوفر بياناتها.
+    - التركيز فقط على أزواج الفوركس OTC (أقرب شيء للسوق الحقيقي).
     """
 
     def __init__(self):
@@ -22,15 +23,21 @@ class QuotexSniperBot:
 
         self.TZ = ZoneInfo("Africa/Tripoli")
 
+        # ===== الأزواج المحدثة بناءً على لقطات شاشتك =====
+        # تم حذف الكريبتو بالكامل لأن شموعهم في كوتيكس OTC لا تتطابق مع السوق الحقيقي
         self.SYMBOLS_MAP = {
-            'BTC/USDT': 'BTCUSD(t)', 'ETH/USDT': 'ETHUSD(t)',
-            'BNB/USDT': 'BNBUSD(t)', 'SOL/USDT': 'SOLUSD(t)',
-            'XRP/USDT': 'XRPUSD(t)', 'DOGE/USDT': 'DOGEUSD(t)',
-            'ADA/USDT': 'ADAUSD(t)', 'EUR/USD': 'EUR/USD OTC',
-            'GBP/USD': 'GBP/USD OTC', 'USD/JPY': 'USD/JPY OTC',
-            'AUD/USD': 'AUD/USD OTC', 'USD/CAD': 'USD/CAD OTC',
-            'EUR/GBP': 'EUR/GBP OTC', 'NZD/USD': 'NZD/USD OTC',
-            'EUR/JPY': 'EUR/JPY OTC', 'GBP/CAD': 'GBP/CAD OTC',
+            'EUR/CHF': 'EUR/CHF OTC',
+            'EUR/GBP': 'EUR/GBP OTC',
+            'AUD/CAD': 'AUD/CAD OTC',
+            'AUD/CHF': 'AUD/CHF OTC',
+            'NZD/CAD': 'NZD/CAD OTC',
+            'EUR/AUD': 'EUR/AUD OTC',
+            'GBP/CAD': 'GBP/CAD OTC',
+            'GBP/CHF': 'GBP/CHF OTC',
+            'EUR/CAD': 'EUR/CAD OTC',
+            'AUD/NZD': 'AUD/NZD OTC',
+            'NZD/CHF': 'NZD/CHF OTC',
+            'CAD/CHF': 'CAD/CHF OTC',
         }
 
         self.stage_memory = {}
@@ -41,10 +48,14 @@ class QuotexSniperBot:
         self.COOLDOWN_SEC = 180
         self.STAGE_TIMEOUT = 900
 
-        msg  = "⚡ *بوت القناص V14.2 (مُصلح)*\n"
+        msg  = "⚡ *بوت القناص V15 (فوركس OTC فقط)*\n"
         msg += "━━━━━━━━━━━━━━━━\n"
-        msg += "🔧 تم إصلاح خلل الإشارات المتزامنة\n"
-        msg += "🚀 جاهز للانقضاض..."
+        msg += "🔧 تحديث جوهري:\n"
+        msg += "• تم استبعاد الكريبتو (OTC وهمي)\n"
+        msg += "• التركيز على فوركس OTC فقط\n"
+        msg += f"📋 مراقبة {len(self.SYMBOLS_MAP)} زوج حقيقي\n"
+        msg += "━━━━━━━━━━━━━━━━\n"
+        msg += "🚀 جاهز..."
         self.tg(msg)
 
     def _get_time(self):
@@ -83,17 +94,13 @@ class QuotexSniperBot:
 
     def _get_all_data_parallel(self):
         data_dict = {}
-        with ThreadPoolExecutor(max_workers=16) as executor:
+        with ThreadPoolExecutor(max_workers=12) as executor:
             futures = {executor.submit(self._fetch_single, sym): sym for sym in self.SYMBOLS_MAP.keys()}
             for future in as_completed(futures):
                 sym, df = future.result()
                 if df is not None:
                     data_dict[sym] = df
         return data_dict
-
-    # ================================================================
-    #   استراتيجية V14.2 (النسخة المُصلحة)
-    # ================================================================
 
     def _analyze_symbol(self, api_sym, df):
         if df is None or len(df) < 25: return None, 0, ""
@@ -120,24 +127,16 @@ class QuotexSniperBot:
 
             stoch_k_cur = cur['stoch_k']
 
-            # ==========================================
-            # المرحلة 1: الستوكاستيك (تم إزالة return)
-            # ==========================================
             if (stoch_k_cur > 70 and self.stage_memory.get(api_sym) != 'PUT_READY'):
                 self.stage_memory[api_sym] = 'PUT_READY'
                 self.stage_time[api_sym] = now
                 self.stats['stage1_hits'] += 1
-                # تم حذف return None عشان يكمل للمرحلة 2 لو التقاطع صار بنفس الشمعة
 
             if (stoch_k_cur < 30 and self.stage_memory.get(api_sym) != 'CALL_READY'):
                 self.stage_memory[api_sym] = 'CALL_READY'
                 self.stage_time[api_sym] = now
                 self.stats['stage1_hits'] += 1
-                # تم حذف return None عشان يكمل للمرحلة 2 لو التقاطع صار بنفس الشمعة
 
-            # ==========================================
-            # المرحلة 2: التقاطع + برايس أكشن
-            # ==========================================
             current_stage = self.stage_memory.get(api_sym)
             
             is_bearish_engulfing = (cur['Close'] < cur['Open']) and (prev['Close'] > prev['Open']) and (cur['Open'] >= prev['Close']) and (cur['Close'] <= prev['Open'])
@@ -176,7 +175,7 @@ class QuotexSniperBot:
         arrow = "⬆️" if direction == 'CALL' else "⬇️"
         now_libya = datetime.datetime.now(self.TZ)
         expiry_time = now_libya + datetime.timedelta(minutes=2)
-        decimals = 5 if 'USD' in api_sym and 'USDT' not in api_sym else 2
+        decimals = 5
 
         msg  = f"⚡ *إشارة {direction} {arrow}*\n"
         msg += f"━━━━━━━━━━━━━━━━\n"
@@ -190,7 +189,7 @@ class QuotexSniperBot:
         self.log(f">>>> SIGNAL: {qx_sym} {direction} | {confirmation}")
 
     def run(self):
-        self.log("SNIPER V14.2 FINAL STARTED - Bug Fixed")
+        self.log("SNIPER V15 STARTED - OTC Forex Only (No Fake Crypto Data)")
         self.log("========================================")
 
         while True:
@@ -205,7 +204,7 @@ class QuotexSniperBot:
                     time.sleep(sec_left - 2)
                     continue
 
-                self.log("🔥 [الثانية 58] جلب البيانات بالتوازي وتحليل الأزواج...")
+                self.log("🔥 [الثانية 58] جلب بيانات الفوركس بالتوازي...")
                 
                 data_dict = self._get_all_data_parallel()
                 
@@ -224,7 +223,7 @@ class QuotexSniperBot:
 
                 if time.time() - self.report_time >= 3600:
                     self.tg(
-                        f"📊 *تقرير V14.2 (ساعة)*\n━━━━━━━━━━━━━━━━\n"
+                        f"📊 *تقرير V15 (ساعة)*\n━━━━━━━━━━━━━━━━\n"
                         f"📍 مراحل أولى: {self.stats['stage1_hits']}\n"
                         f"🔥 شموع ابتلاعية: {self.stats['engulfing_hits']}\n"
                         f"🎯 إشارات نهائية: {self.stats['signals_sent']}\n━━━━━━━━━━━━━━━━"
