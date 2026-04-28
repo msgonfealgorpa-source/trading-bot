@@ -1,5 +1,5 @@
-import time, pandas as pd, ta, datetime, os, sys, asyncio
-import aiohttp
+import time, pandas as pd, ta, requests, datetime, os, sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from zoneinfo import ZoneInfo
 
 if hasattr(sys.stdout, 'reconfigure'):
@@ -7,12 +7,12 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 class QuotexSniperBot:
     """
-    بوت القناص V14.2 (Async + انقضاض الشمعة - Zero Lag)
-    ======================================================
-    - جلب البيانات بالتوازي (Asyncio + Aiohttp).
+    بوت القناص V14.2 (توازي بدون مكتبات + انقضاض الشمعة)
+    =======================================================
+    - استخدام ThreadPoolExecutor للتوازي (بدون aiohttp).
     - توقيت ذكي: الفحص في آخر ثانيتين من الشمعة فقط.
-    - EMA 10/20 أسرع من SMA.
-    - فلاتر برايس أكشن (شمعة الابتلاع Engulfing).
+    - EMA 10/20 (أسرع استجابة).
+    - فلاتر برايس أكشن (شمعة الابتلاع).
     """
 
     def __init__(self):
@@ -24,7 +24,6 @@ class QuotexSniperBot:
             return
 
         self.TZ = ZoneInfo("Africa/Tripoli")
-        self.session = None # سيتم إنشاؤه في Async
 
         self.SYMBOLS_MAP = {
             'BTC/USDT': 'BTCUSD(t)', 'ETH/USDT': 'ETHUSD(t)',
@@ -45,15 +44,27 @@ class QuotexSniperBot:
         self.COOLDOWN_SEC = 180
         self.STAGE_TIMEOUT = 900
 
+        msg  = "⚡ *بوت القناص V14.2 (توازي ذكي)*\n"
+        msg += "━━━━━━━━━━━━━━━━\n"
+        msg += "🚀 تم تفعيل التحديثات:\n"
+        msg += "• جلب بالتوازي (بدون مكتبات جديدة)\n"
+        msg += "• مؤشر EMA السريع\n"
+        msg += "• فلاتر شموع الابتلاع\n"
+        msg += "• الفحص الذكي (آخر ثانيتين)\n"
+        msg += "━━━━━━━━━━━━━━━━\n"
+        msg += "⏳ ينتظر بداية الشمعة القادمة..."
+        self.tg(msg)
+
     def _get_time(self):
         return datetime.datetime.now(self.TZ).strftime("%H:%M:%S")
 
-    async def tg(self, msg):
+    def tg(self, msg):
         try:
-            url = f"https://api.telegram.org/bot{self.tg_token}/sendMessage"
-            payload = {'chat_id': self.tg_chat, 'text': msg, 'parse_mode': 'Markdown'}
-            async with self.session.post(url, data=payload, timeout=5) as resp:
-                pass
+            requests.post(
+                f"https://api.telegram.org/bot{self.tg_token}/sendMessage",
+                data={'chat_id': self.tg_chat, 'text': msg, 'parse_mode': 'Markdown'},
+                timeout=5
+            )
         except:
             pass
 
@@ -62,31 +73,36 @@ class QuotexSniperBot:
         print(f"[{ts}] {msg}")
 
     # ================================================================
-    #    جلب البيانات (Async) - التوازي السحري
+    #    جلب البيانات (توازي باستخدام ThreadPoolExecutor)
     # ================================================================
 
-    async def _fetch_single(self, sym, session):
+    def _fetch_single(self, sym):
         base, quote = sym.split('/')
         url = "https://min-api.cryptocompare.com/data/v2/histominute"
-        params = {'fsym': base, 'tsym': quote, 'limit': 30} # 30 شمعة فقط
+        params = {'fsym': base, 'tsym': quote, 'limit': 30}
         try:
-            async with session.get(url, params=params, timeout=5) as resp:
-                d = await resp.json()
-                if d.get('Response') == 'Success':
-                    raw = d.get('Data', {}).get('Data', [])
-                    if raw:
-                        df = pd.DataFrame(raw, columns=['time', 'open', 'high', 'low', 'close', 'volumeto'])
-                        df['time'] = pd.to_datetime(df['time'], unit='ms')
-                        return sym, df
+            r = requests.get(url, params=params, timeout=5)
+            d = r.json()
+            if d.get('Response') == 'Success':
+                raw = d.get('Data', {}).get('Data', [])
+                if raw:
+                    df = pd.DataFrame(raw, columns=['time', 'open', 'high', 'low', 'close', 'volumeto'])
+                    df['time'] = pd.to_datetime(df['time'], unit='ms')
+                    return sym, df
         except:
             pass
         return sym, None
 
-    async def _get_all_data_parallel(self):
-        tasks = [self._fetch_single(sym, self.session) for sym in self.SYMBOLS_MAP.keys()]
-        # جلب كل الأزواج في نفس اللحظة (أقل من ثانية)
-        results = await asyncio.gather(*tasks)
-        return {sym: df for sym, df in results if df is not None}
+    def _get_all_data_parallel(self):
+        data_dict = {}
+        # فتح 16 مسار مؤقت لجلب الأزواج في نفس الوقت
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            futures = {executor.submit(self._fetch_single, sym): sym for sym in self.SYMBOLS_MAP.keys()}
+            for future in as_completed(futures):
+                sym, df = future.result()
+                if df is not None:
+                    data_dict[sym] = df
+        return data_dict
 
     # ================================================================
     #   استراتيجية V14.2 (EMA + Stoch + Engulfing)
@@ -98,7 +114,7 @@ class QuotexSniperBot:
         try:
             df = df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'}).copy()
 
-            # 1. EMA بدل SMA (أسرع استجابة)
+            # 1. EMA (أسرع استجابة من SMA)
             df['ema10'] = ta.trend.ema_indicator(df['Close'], window=10)
             df['ema20'] = ta.trend.ema_indicator(df['Close'], window=20)
 
@@ -132,13 +148,11 @@ class QuotexSniperBot:
                 self.stats['stage1_hits'] += 1
                 return None, price, "🟢 مرحلة1 (ستوك تحت 30)"
 
-            # --- المرحلة 2: التقاطع + برايس أكشن (الابتلاعية) ---
+            # --- المرحلة 2: التقاطع + برايس أكشن ---
             current_stage = self.stage_memory.get(api_sym)
             
             # حساب شمعة الابتلاع (Engulfing)
-            # PUT: شمعة حمراء تبتلع خضراء
             is_bearish_engulfing = (cur['Close'] < cur['Open']) and (prev['Close'] > prev['Open']) and (cur['Open'] >= prev['Close']) and (cur['Close'] <= prev['Open'])
-            # CALL: شمعة خضراء تبتلع حمراء
             is_bullish_engulfing = (cur['Close'] > cur['Open']) and (prev['Close'] < prev['Open']) and (cur['Open'] <= prev['Close']) and (cur['Close'] >= prev['Open'])
 
             confirmation = "تقاطع عادي"
@@ -162,7 +176,7 @@ class QuotexSniperBot:
                     return 'CALL', price, confirmation
 
         except Exception as e:
-            return None, 0, f"خطأ: {str(e)[:20]}"
+            return None, 0, ""
 
         return None, 0, ""
 
@@ -170,7 +184,7 @@ class QuotexSniperBot:
     #                            إرسال الإشارة
     # ================================================================
 
-    async def _send_signal(self, api_sym, qx_sym, direction, price, confirmation):
+    def _send_signal(self, api_sym, qx_sym, direction, price, confirmation):
         self.stats['signals_sent'] += 1
         self.last_signal_time[api_sym] = time.time()
 
@@ -189,83 +203,72 @@ class QuotexSniperBot:
         msg += f"🧠 EMA10/20 + Stoch Filter\n"
         msg += f"━━━━━━━━━━━━━━━━"
         
-        await self.tg(msg)
+        self.tg(msg)
         self.log(f">>>> SIGNAL: {qx_sym} {direction} | {confirmation}")
 
     # ================================================================
     #               التشغيل الرئيسي (التوقيت الذكي)
     # ================================================================
 
-    async def run(self):
-        # إنشاء Session لـ Async
-        timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as self.session:
-            
-            await self.tg("⚡ *بوت القناص V14.2 (Async)*\n━━━━━━━━━━━━━━━━\n🚀 تم تفعيل:\n- جلب التوازي (Async)\n- مؤشر EMA السريع\n- فلاتر شموع الابتلاع\n- الفحص الذكي (آخر ثانيتين)\n━━━━━━━━━━━━━━━━\n⏳ ينتظر بداية الشمعة القادمة...")
-            
-            self.log("SNIPER V14.2 STARTED - Smart Clock Synced")
+    def run(self):
+        self.log("SNIPER V14.2 STARTED - Smart Clock Synced (No Extra Libs)")
+        self.log("========================================")
 
-            while True:
-                try:
-                    now_libya = datetime.datetime.now(self.TZ)
-                    current_second = now_libya.second
+        while True:
+            try:
+                now_libya = datetime.datetime.now(self.TZ)
+                current_second = now_libya.second
+                
+                # ==========================================
+                # 🧠 التوقيت الذكي (فقط بالموارد الأصلية)
+                # ==========================================
+                sec_left = 60 - current_second - (now_libya.microsecond / 1_000_000)
+
+                if sec_left > 2:
+                    # البوت ينام حتى يبقى ثانيتين على نهاية الشمعة
+                    self.log(f"⏳ انتظار ذكي... باقي {int(sec_left)-2} ثانية.")
+                    time.sleep(sec_left - 2)
+                    continue
+
+                # نحن الآن في الثواني (58 أو 59) - وقت الانقضاض!
+                self.log("🔥 [الثانية 58] جلب البيانات بالتوازي وتحليل الأزواج...")
+                
+                # 1. جلب كل البيانات بالتوازي (بدون مكتبات جديدة)
+                data_dict = self._get_all_data_parallel()
+                
+                # 2. تحليل الإشارات
+                for api_sym, df in data_dict.items():
+                    if api_sym in self.last_signal_time:
+                        if time.time() - self.last_signal_time[api_sym] < self.COOLDOWN_SEC:
+                            continue
+
+                    direction, price, confirmation = self._analyze_symbol(api_sym, df)
                     
-                    # ==========================================
-                    # 🧠 التوقيت الذكي (السحر الحقيقي)
-                    # ==========================================
-                    # نحسب كم ثانية باقية على نهاية الشمعة
-                    sec_left = 60 - current_second - (now_libya.microsecond / 1_000_000)
+                    if direction and price > 0:
+                        qx_sym = self.SYMBOLS_MAP[api_sym]
+                        self._send_signal(api_sym, qx_sym, direction, price, confirmation)
 
-                    if sec_left > 2:
-                        # البوت ينام ولا يستهلك بيانات حتى تأتي الثانية 58
-                        self.log(f"⏳ انتظار ذكي... باقي {int(sec_left)-2} ثانية على فحص الشمعة.")
-                        await asyncio.sleep(sec_left - 2)
-                        continue
+                self.log("✅ تم فحص الشمعة - انتظار الشمعة القادمة.")
 
-                    # نحن الآن في الثواني (58 أو 59 أو 00) - وقت الانقضاض!
-                    self.log("🔥 [الثانية 58] جلب البيانات بالتوازي وتحليل الأزواج...")
-                    
-                    # 1. جلب كل البيانات في لحظة واحدة
-                    data_dict = await self._get_all_data_parallel()
-                    
-                    # 2. تحليل الإشارات
-                    tasks_to_fire = []
-                    for api_sym, df in data_dict.items():
-                        if api_sym in self.last_signal_time:
-                            if time.time() - self.last_signal_time[api_sym] < self.COOLDOWN_SEC:
-                                continue
+                # تقرير ساعة
+                if time.time() - self.report_time >= 3600:
+                    self.tg(
+                        f"📊 *تقرير V14.2 (ساعة)*\n━━━━━━━━━━━━━━━━\n"
+                        f"📍 مراحل أولى (ستوك): {self.stats['stage1_hits']}\n"
+                        f"🔥 شموع ابتلاعية: {self.stats['engulfing_hits']}\n"
+                        f"🎯 إشارات نهائية: {self.stats['signals_sent']}\n━━━━━━━━━━━━━━━━"
+                    )
+                    self.report_time = time.time()
 
-                        direction, price, confirmation = self._analyze_symbol(api_sym, df)
-                        
-                        if direction and price > 0:
-                            qx_sym = self.SYMBOLS_MAP[api_sym]
-                            tasks_to_fire.append(self._send_signal(api_sym, qx_sym, direction, price, confirmation))
+                # انتظار 3 ثوان لتجنب إعادة فحص نفس الشمعة
+                time.sleep(3)
 
-                    # 3. إرسال الإشارات المكتشفة
-                    if tasks_to_fire:
-                        await asyncio.gather(*tasks_to_fire)
-                    else:
-                        self.log("✅ تم فحص الشمعة - لا توجد شروط مستوفاة.")
-
-                    # تقرير ساعة
-                    if time.time() - self.report_time >= 3600:
-                        await self.tg(
-                            f"📊 *تقرير V14.2 (ساعة)*\n━━━━━━━━━━━━━━━━\n"
-                            f"📍 مراحل أولى (ستوك): {self.stats['stage1_hits']}\n"
-                            f"🔥 شموع ابتلاعية: {self.stats['engulfing_hits']}\n"
-                            f"🎯 إشارات نهائية: {self.stats['signals_sent']}\n━━━━━━━━━━━━━━━━"
-                        )
-                        self.report_time = time.time()
-
-                    # انتظار بسيط لتجاوز الثانية 00 وعدم تكرار فحص نفس الشمعة
-                    await asyncio.sleep(3)
-
-                except Exception as e:
-                    self.log(f"ERR: {e}")
-                    await asyncio.sleep(10)
+            except Exception as e:
+                self.log(f"ERR: {e}")
+                time.sleep(10)
 
 
 if __name__ == "__main__":
     bot = QuotexSniperBot()
     if bot.tg_token:
-        asyncio.run(bot.run())
+        bot.run()
