@@ -6,10 +6,11 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 class QuotexSniperBot:
     """
-    بوت القناص V14 (تقاطع متتابع - المرحلتين)
-    =============================================
+    بوت القناص V14.1 (تقاطع متتابع - انقضاض سريع)
+    =================================================
     المرحلة 1: الستوكاستيك يدخل منطقة التشبع (فوق 70 أو تحت 30)
     المرحلة 2: بعد شمعات، الموفينج افرج 10 يقطع 20 → إشارة
+    ⚡ تم تقليص أوقات الانتظار لأدنى حد لتقليل التأخير
     """
 
     def __init__(self):
@@ -42,10 +43,7 @@ class QuotexSniperBot:
         }
 
         # ===== ذاكرة المرحلتين لكل زوج =====
-        # المفتاح: اسم الزوج
-        # القيمة: 'PUT_READY' أو 'CALL_READY' أو None
         self.stage_memory = {}
-        # لحفظ وقت دخول المرحلة 1 لكل زوج (عشان نلغي بعد 15 دقيقة)
         self.stage_time = {}
 
         self.last_signal_time = {}
@@ -54,7 +52,7 @@ class QuotexSniperBot:
         self.COOLDOWN_SEC = 180  # 3 دقائق مهلة بين الإشارات
         self.STAGE_TIMEOUT = 900  # 15 دقيقة أقصى انتظار للمرحلة 2
 
-        msg  = "🎯 *بوت القناص V14 (المرحلتين)*\n"
+        msg  = "⚡ *بوت القناص V14.1 (انقضاض سريع)*\n"
         msg += "━━━━━━━━━━━━━━━━\n"
         msg += "🕐 التوقيت: ليبيا (GMT+2)\n"
         msg += f"📋 مراقبة {len(self.SYMBOLS_MAP)} زوج\n"
@@ -69,8 +67,9 @@ class QuotexSniperBot:
         msg += "━━━━━━━━━━━━━━━━\n"
         msg += "⏱️ مدة الصفقة: *دقيقتان*\n"
         msg += "⏳ أقصى انتظار: *15 دقيقة*\n"
+        msg += "⚡ فحص كل: *15 ثانية* (بدل 30)\n"
         msg += "━━━━━━━━━━━━━━━━\n"
-        msg += "🚀 جاهز للعمل..."
+        msg += "🚀 جاهز للانقضاض..."
         self.tg(msg)
 
     def _get_time(self):
@@ -97,10 +96,12 @@ class QuotexSniperBot:
     def _get_1m_data(self, sym):
         base, quote = sym.split('/')
         url = "https://min-api.cryptocompare.com/data/v2/histominute"
-        params = {'fsym': base, 'tsym': quote, 'limit': 100}
+        # ⚡ تعديل: 50 شمعة بدل 100 (أسرع في الجلب ونكفي لحساب المؤشرات)
+        params = {'fsym': base, 'tsym': quote, 'limit': 50}
 
         try:
-            r = requests.get(url, params=params, timeout=10)
+            # ⚡ تعديل: timeout 5 ثواني بدل 10
+            r = requests.get(url, params=params, timeout=5)
             d = r.json()
             if d.get('Response') == 'Success':
                 raw = d.get('Data', {}).get('Data', [])
@@ -114,16 +115,10 @@ class QuotexSniperBot:
         return None
 
     # ================================================================
-    #      🎯 استراتيجية المرحلتين المتتابعتين
+    #      🎯 استراتيجية المرحلتين المتتابعتين (بدون أي تغيير)
     # ================================================================
 
     def _analyze_symbol(self, api_sym, qx_sym, df):
-        """
-        يعيد 3 قيم:
-        - direction: 'CALL' أو 'PUT' أو None
-        - price: السعر الحالي
-        - stage_msg: رسالة توضيحية عن المرحلة الحالية
-        """
         stage_msg = None
 
         if df is None or len(df) < 25:
@@ -197,29 +192,23 @@ class QuotexSniperBot:
 
             # ==========================================
             # المرحلة 2: فحص تقاطع الموفينج افرج
-            # (فقط إذا كنا في المرحلة 1)
             # ==========================================
 
             current_stage = self.stage_memory.get(api_sym)
 
             if current_stage == 'PUT_READY':
-                # ننتظر SMA10 يقطع SMA20 لتحت
                 cross_down = (prev['sma10'] >= prev['sma20']) and (cur['sma10'] < cur['sma20'])
                 if cross_down:
-                    # نجح! إشارة هبوط
-                    self.stage_memory[api_sym] = None  # مسح الذاكرة
+                    self.stage_memory[api_sym] = None
                     stage_msg = f"🎯 المرحلة2: تقاطع هبوطي مؤكد! SMA10={cur['sma10']:.5f} قطع SMA20={cur['sma20']:.5f}"
                     return 'PUT', price, stage_msg
                 else:
-                    # لا يزال ينتظر
                     dist = abs(cur['sma10'] - cur['sma20'])
                     stage_msg = f"🔴 ينتظر تقاطع هبوطي... الفرق بين الموفينجين: {dist:.5f}"
 
             elif current_stage == 'CALL_READY':
-                # ننتظر SMA10 يقطع SMA20 لفوق
                 cross_up = (prev['sma10'] <= prev['sma20']) and (cur['sma10'] > cur['sma20'])
                 if cross_up:
-                    # نجح! إشارة صعود
                     self.stage_memory[api_sym] = None
                     stage_msg = f"🎯 المرحلة2: تقاطع صعودي مؤكد! SMA10={cur['sma10']:.5f} قطع SMA20={cur['sma20']:.5f}"
                     return 'CALL', price, stage_msg
@@ -250,7 +239,7 @@ class QuotexSniperBot:
 
         decimals = 5 if 'USD' in api_sym and 'USDT' not in api_sym else 2
 
-        msg  = f"{icon} *إشارة {direction} {arrow}*\n"
+        msg  = f"⚡ *إشارة {direction} {arrow}*\n"
         msg += f"━━━━━━━━━━━━━━━━\n"
         msg += f"🪙 الزوج: *{qx_sym}*\n"
         msg += f"📊 الاتجاه: *{direction}*\n"
@@ -267,7 +256,7 @@ class QuotexSniperBot:
     # ================================================================
 
     def run(self):
-        self.log("SNIPER V14 STARTED - Two-Stage Sequential Strategy")
+        self.log("SNIPER V14.1 STARTED - Two-Stage Sequential (Fast Scan)")
         self.log(f"Monitoring {len(self.SYMBOLS_MAP)} pairs on 1-minute timeframe...")
         self.log("========================================")
 
@@ -279,20 +268,16 @@ class QuotexSniperBot:
 
                 for api_sym, qx_sym in self.SYMBOLS_MAP.items():
 
-                    # حماية الـ Cooldown بعد إشارة
                     if api_sym in self.last_signal_time:
                         if time.time() - self.last_signal_time[api_sym] < self.COOLDOWN_SEC:
                             continue
 
-                    # جلب البيانات
                     df = self._get_1m_data(api_sym)
                     if df is None:
                         continue
 
-                    # التحليل بمرحلتيه
                     direction, price, stage_msg = self._analyze_symbol(api_sym, qx_sym, df)
 
-                    # طباعة حالة كل زوج (مختصرة)
                     if stage_msg:
                         short_sym = api_sym.split('/')[0]
                         if 'المرحلة1' in stage_msg or '🎯' in stage_msg or '⏰' in stage_msg:
@@ -300,12 +285,12 @@ class QuotexSniperBot:
                         elif self.stage_memory.get(api_sym):
                             active_stages += 1
 
-                    # إطلاق الإشارة إذا اكتملت المرحلتين
                     if direction and price > 0:
                         self._send_signal(api_sym, qx_sym, direction, price)
                         cycle_signals += 1
 
-                    time.sleep(0.5)
+                    # ⚡ تعديل: 0.3 ثانية بدل 0.5 بين الأزواج
+                    time.sleep(0.3)
 
                 # ملخص الدورة
                 self.log(f"--- دورة #{self.stats['scans']} | مراقب نشط: {active_stages} | إشارات: {cycle_signals} ---")
@@ -313,7 +298,7 @@ class QuotexSniperBot:
                 # تقرير ساعة لتيليجرام
                 if time.time() - self.report_time >= 3600:
                     self.tg(
-                        f"📊 *تقرير ساعة - V14*\n"
+                        f"📊 *تقرير ساعة - V14.1*\n"
                         f"━━━━━━━━━━━━━━━━\n"
                         f"🔍 فحوصات: {self.stats['scans']}\n"
                         f"📍 مراحل أولى: {self.stats['stage1_hits']}\n"
@@ -327,8 +312,8 @@ class QuotexSniperBot:
                 self.log(f"MAIN LOOP ERR: {e}")
                 time.sleep(10)
 
-            # انتظار 30 ثانية
-            time.sleep(30)
+            # ⚡ تعديل: 15 ثانية بدل 30 ثانية (أسرع انقضاض)
+            time.sleep(15)
 
 
 if __name__ == "__main__":
