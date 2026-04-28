@@ -6,13 +6,10 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 class QuotexSniperBot:
     """
-    بوت القناص V14.0 (SMA Cross + Stochastic Cross + Session Filter)
-    ================================================================
-    - كسر SMA10 × SMA20 يجب أن يصاحبه كسر Stochastic K×D
-    - الستوكاستيك: الكسر فوق 70 لهبوط، تحت 30 لصعود
-    - فلتر أوقات التداول: جلسة لندن + نيويورك فقط
-    - فلتر أخبار: يتجنب الأخبار المتوسطة والعالية الأهمية
-    - مدة الصفقة: دقيقتان
+    بوت القناص V14 (تقاطع متتابع - المرحلتين)
+    =============================================
+    المرحلة 1: الستوكاستيك يدخل منطقة التشبع (فوق 70 أو تحت 30)
+    المرحلة 2: بعد شمعات، الموفينج افرج 10 يقطع 20 → إشارة
     """
 
     def __init__(self):
@@ -44,38 +41,34 @@ class QuotexSniperBot:
             'GBP/CAD': 'GBP/CAD OTC',
         }
 
+        # ===== ذاكرة المرحلتين لكل زوج =====
+        # المفتاح: اسم الزوج
+        # القيمة: 'PUT_READY' أو 'CALL_READY' أو None
+        self.stage_memory = {}
+        # لحفظ وقت دخول المرحلة 1 لكل زوج (عشان نلغي بعد 15 دقيقة)
+        self.stage_time = {}
+
         self.last_signal_time = {}
-        self.stats = {'signals_sent': 0, 'scans': 0, 'skipped_session': 0, 'skipped_news': 0}
+        self.stats = {'signals_sent': 0, 'stage1_hits': 0, 'scans': 0}
         self.report_time = time.time()
-        self.news_cache = []
-        self.news_cache_time = 0
-        self.COOLDOWN_SEC = 180
+        self.COOLDOWN_SEC = 180  # 3 دقائق مهلة بين الإشارات
+        self.STAGE_TIMEOUT = 900  # 15 دقيقة أقصى انتظار للمرحلة 2
 
-        # أوقات التداول الجيدة (بتوقيت ليبيا GMT+2)
-        # جلسة لندن: 09:00 - 13:00
-        # جلسة نيويورك: 15:30 - 21:00
-        # التداخل (الأفضل): 15:30 - 17:00
-        self.GOOD_SESSIONS = [
-            (9, 0, 13, 0),      # لندن
-            (15, 30, 21, 0),    # نيويورك
-        ]
-
-        msg  = "🎯 *بوت القناص V14*\n"
+        msg  = "🎯 *بوت القناص V14 (المرحلتين)*\n"
         msg += "━━━━━━━━━━━━━━━━\n"
         msg += "🕐 التوقيت: ليبيا (GMT+2)\n"
         msg += f"📋 مراقبة {len(self.SYMBOLS_MAP)} زوج\n"
+        msg += "🧠 الاستراتيجية (تقاطع متتابع):\n"
         msg += "━━━━━━━━━━━━━━━━\n"
-        msg += "🧠 *الاستراتيجية:*\n"
-        msg += "1️⃣ `SMA 10` 🔴 يكسر `SMA 20` 🟡\n"
-        msg += "2️⃣ `Stoch K` يكسر `Stoch D`\n"
-        msg += "   🔴 فوق 70 كسر لاسفل = هبوط\n"
-        msg += "   🟢 تحت 30 كسر لاعلى = صعود\n"
+        msg += "📍 *المرحلة 1*: ستوكاستيك يدخل تشبع\n"
+        msg += "   🔴 فوق 70 → جاهز لهبوط\n"
+        msg += "   🟢 تحت 30 → جاهز لصعود\n"
+        msg += "📍 *المرحلة 2*: موفينج يقطع بعده\n"
+        msg += "   SMA10 🔴 يقطع SMA20 🟡 لتحت\n"
+        msg += "   SMA10 🔴 يقطع SMA20 🟡 لفوق\n"
         msg += "━━━━━━━━━━━━━━━━\n"
-        msg += "⏰ *اوقات العمل:*\n"
-        msg += "🇬🇧 لندن: 09:00 - 13:00\n"
-        msg += "🇺🇸 نيويورك: 15:30 - 21:00\n"
-        msg += "📰 فلتر اخبار: مفعل ✅\n"
         msg += "⏱️ مدة الصفقة: *دقيقتان*\n"
+        msg += "⏳ أقصى انتظار: *15 دقيقة*\n"
         msg += "━━━━━━━━━━━━━━━━\n"
         msg += "🚀 جاهز للعمل..."
         self.tg(msg)
@@ -98,86 +91,7 @@ class QuotexSniperBot:
         print(f"[{ts}] {msg}")
 
     # ================================================================
-    #                   فلتر أوقات التداول
-    # ================================================================
-
-    def _is_good_session(self):
-        """يتحقق هل الوقت الحالي ضمن أوقات التداول الجيدة"""
-        now = datetime.datetime.now(self.TZ)
-        h, m = now.hour, now.minute
-        current_min = h * 60 + m
-
-        for start_h, start_m, end_h, end_m in self.GOOD_SESSIONS:
-            start_min = start_h * 60 + start_m
-            end_min = end_h * 60 + end_m
-            if start_min <= current_min < end_min:
-                return True, "لندن" if start_h == 9 else "نيويورك"
-
-        return False, None
-
-    # ================================================================
-    #                   فلتر الأخبار
-    # ================================================================
-
-    def _fetch_news(self):
-        """يجلب أخبار الأسبوع من Faireconomy (مجاني، بدون API key)"""
-        try:
-            r = requests.get(
-                "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
-                timeout=8
-            )
-            if r.status_code == 200:
-                data = r.json()
-                self.news_cache = data
-                self.news_cache_time = time.time()
-                self.log(f"News updated: {len(data)} events loaded")
-                return data
-        except Exception as e:
-            self.log(f"News fetch err: {str(e)[:40]}")
-        return self.news_cache
-
-    def _is_news_safe(self):
-        """يتحقق هل السوق آمن (لا أخبار مهمة خلال 30 دقيقة)"""
-        now = datetime.datetime.now(self.TZ)
-
-        # تحديث الكاش كل 15 دقيقة
-        if time.time() - self.news_cache_time > 900:
-            self._fetch_news()
-
-        if not self.news_cache:
-            return True, None
-
-        for n in self.news_cache:
-            try:
-                # وقت الخبر بـ UTC
-                news_str = n.get('date', '')
-                if not news_str:
-                    continue
-
-                # تحويل إلى توقيت ليبيا
-                news_utc = datetime.datetime.strptime(
-                    news_str[:19], '%Y-%m-%dT%H:%M:%S'
-                ).replace(tzinfo=ZoneInfo("UTC"))
-                news_libya = news_utc.astimezone(self.TZ)
-
-                # الفرق بالدقائق بين الآن ووقت الخبر
-                diff_min = (news_libya - now).total_seconds() / 60
-
-                # إذا كان الخبر خلال 30 دقيقة القادمة
-                if -5 < diff_min < 30:
-                    impact = n.get('impact', '').strip()
-                    # تجنب الأخبار المتوسطة والعالية
-                    if impact in ['High', 'Medium', 'HIGH', 'MEDIUM']:
-                        title = n.get('title', 'Unknown')
-                        return False, title
-
-            except Exception:
-                continue
-
-        return True, None
-
-    # ================================================================
-    #                   جلب بيانات الدقيقة
+    #                   جلب بيانات الدقيقة الواحدة
     # ================================================================
 
     def _get_1m_data(self, sym):
@@ -200,12 +114,20 @@ class QuotexSniperBot:
         return None
 
     # ================================================================
-    #      🎯 الاستراتيجية: كسر مزدوج (موفينج + ستوكاستيك)
+    #      🎯 استراتيجية المرحلتين المتتابعتين
     # ================================================================
 
-    def _analyze_symbol(self, df):
+    def _analyze_symbol(self, api_sym, qx_sym, df):
+        """
+        يعيد 3 قيم:
+        - direction: 'CALL' أو 'PUT' أو None
+        - price: السعر الحالي
+        - stage_msg: رسالة توضيحية عن المرحلة الحالية
+        """
+        stage_msg = None
+
         if df is None or len(df) < 25:
-            return None, 0
+            return None, 0, "بيانات غير كافية"
 
         try:
             df = df.rename(columns={
@@ -213,11 +135,10 @@ class QuotexSniperBot:
                 'low': 'Low', 'close': 'Close'
             }).copy()
 
-            # SMA 10 (أحمر) و SMA 20 (أصفر)
+            # حساب المؤشرات
             df['sma10'] = ta.trend.sma_indicator(df['Close'], window=10)
             df['sma20'] = ta.trend.sma_indicator(df['Close'], window=20)
 
-            # Stochastic (14, 3, 3)
             stoch = ta.momentum.StochasticOscillator(
                 high=df['High'], low=df['Low'], close=df['Close'],
                 window=14, smooth_window=3
@@ -230,42 +151,89 @@ class QuotexSniperBot:
             price = cur['Close']
 
             if pd.isna(cur['sma10']) or pd.isna(cur['sma20']) or pd.isna(cur['stoch_k']):
-                return None, price
+                return None, price, "بيانات ناقصة (NaN)"
 
-            # === كسر الموفينج ===
-            ma_cross_down = (prev['sma10'] >= prev['sma20']) and (cur['sma10'] < cur['sma20'])
-            ma_cross_up = (prev['sma10'] <= prev['sma20']) and (cur['sma10'] > cur['sma20'])
-
-            # === كسر الستوكاستيك ===
-            stoch_cross_down = (prev['stoch_k'] >= prev['stoch_d']) and (cur['stoch_k'] < cur['stoch_d'])
-            stoch_cross_up = (prev['stoch_k'] <= prev['stoch_d']) and (cur['stoch_k'] > cur['stoch_d'])
+            now = time.time()
 
             # ==========================================
-            # 🔴 هبوط (PUT)
-            # كسر موفينج لتحت + كسر ستوكاستيك لتحت فوق منطقة 70
+            # التحقق من انتهاء صلاحية المرحلة 1
             # ==========================================
-            if ma_cross_down and stoch_cross_down and prev['stoch_k'] > 70:
-                self.log(
-                    f"  >> PUT: MA10({cur['sma10']:.5f})xMA20({cur['sma20']:.5f}) DOWN "
-                    f"+ Stoch K({prev['stoch_k']:.1f})xD({prev['stoch_d']:.1f}) DOWN above 70"
-                )
-                return 'PUT', price
+            if api_sym in self.stage_memory and self.stage_memory[api_sym] is not None:
+                elapsed = now - self.stage_time.get(api_sym, 0)
+                if elapsed > self.STAGE_TIMEOUT:
+                    old_stage = self.stage_memory[api_sym]
+                    self.stage_memory[api_sym] = None
+                    stage_msg = f"⏰ انتهت صلاحية المرحلة1 ({old_stage}) بعد {elapsed/60:.0f} دقيقة - إعادة تعيين"
+                    return None, price, stage_msg
 
             # ==========================================
-            # 🟢 صعود (CALL)
-            # كسر موفينج لفوق + كسر ستوكاستيك لفوق تحت منطقة 30
+            # المرحلة 1: فحص الستوكاستيك
             # ==========================================
-            if ma_cross_up and stoch_cross_up and prev['stoch_k'] < 30:
-                self.log(
-                    f"  >> CALL: MA10({cur['sma10']:.5f})xMA20({cur['sma20']:.5f}) UP "
-                    f"+ Stoch K({prev['stoch_k']:.1f})xD({prev['stoch_d']:.1f}) UP below 30"
-                )
-                return 'CALL', price
+
+            stoch_k_cur = cur['stoch_k']
+            stoch_k_prev = prev['stoch_k']
+
+            # --- هبوط: ستوك يكسر فوق 70 ---
+            stoch_broke_above70 = (stoch_k_prev <= 70) and (stoch_k_cur > 70)
+            stoch_already_above70 = (stoch_k_cur > 70) and (self.stage_memory.get(api_sym) != 'PUT_READY')
+
+            if stoch_broke_above70 or stoch_already_above70:
+                self.stage_memory[api_sym] = 'PUT_READY'
+                self.stage_time[api_sym] = now
+                self.stats['stage1_hits'] += 1
+                stage_msg = f"🔴 المرحلة1: ستوك دخل فوق 70 ({stoch_k_cur:.1f}) → ينتظر تقاطع موفينج لتحت"
+                return None, price, stage_msg
+
+            # --- صعود: ستوك يكسر تحت 30 ---
+            stoch_broke_below30 = (stoch_k_prev >= 30) and (stoch_k_cur < 30)
+            stoch_already_below30 = (stoch_k_cur < 30) and (self.stage_memory.get(api_sym) != 'CALL_READY')
+
+            if stoch_broke_below30 or stoch_already_below30:
+                self.stage_memory[api_sym] = 'CALL_READY'
+                self.stage_time[api_sym] = now
+                self.stats['stage1_hits'] += 1
+                stage_msg = f"🟢 المرحلة1: ستوك دخل تحت 30 ({stoch_k_cur:.1f}) → ينتظر تقاطع موفينج لفوق"
+                return None, price, stage_msg
+
+            # ==========================================
+            # المرحلة 2: فحص تقاطع الموفينج افرج
+            # (فقط إذا كنا في المرحلة 1)
+            # ==========================================
+
+            current_stage = self.stage_memory.get(api_sym)
+
+            if current_stage == 'PUT_READY':
+                # ننتظر SMA10 يقطع SMA20 لتحت
+                cross_down = (prev['sma10'] >= prev['sma20']) and (cur['sma10'] < cur['sma20'])
+                if cross_down:
+                    # نجح! إشارة هبوط
+                    self.stage_memory[api_sym] = None  # مسح الذاكرة
+                    stage_msg = f"🎯 المرحلة2: تقاطع هبوطي مؤكد! SMA10={cur['sma10']:.5f} قطع SMA20={cur['sma20']:.5f}"
+                    return 'PUT', price, stage_msg
+                else:
+                    # لا يزال ينتظر
+                    dist = abs(cur['sma10'] - cur['sma20'])
+                    stage_msg = f"🔴 ينتظر تقاطع هبوطي... الفرق بين الموفينجين: {dist:.5f}"
+
+            elif current_stage == 'CALL_READY':
+                # ننتظر SMA10 يقطع SMA20 لفوق
+                cross_up = (prev['sma10'] <= prev['sma20']) and (cur['sma10'] > cur['sma20'])
+                if cross_up:
+                    # نجح! إشارة صعود
+                    self.stage_memory[api_sym] = None
+                    stage_msg = f"🎯 المرحلة2: تقاطع صعودي مؤكد! SMA10={cur['sma10']:.5f} قطع SMA20={cur['sma20']:.5f}"
+                    return 'CALL', price, stage_msg
+                else:
+                    dist = abs(cur['sma10'] - cur['sma20'])
+                    stage_msg = f"🟢 ينتظر تقاطع صعودي... الفرق بين الموفينجين: {dist:.5f}"
+
+            else:
+                stage_msg = f"⏳ ستوك خارج المناطق ({stoch_k_cur:.1f}) - ينتظر دخول منطقة تشبع"
 
         except Exception as e:
-            return None, 0
+            return None, 0, f"خطأ تحليل: {str(e)[:30]}"
 
-        return None, 0
+        return None, 0, stage_msg
 
     # ================================================================
     #                            إرسال الإشارة
@@ -282,131 +250,85 @@ class QuotexSniperBot:
 
         decimals = 5 if 'USD' in api_sym and 'USDT' not in api_sym else 2
 
-        # تحديد الجلسة الحالية
-        is_session, session_name = self._is_good_session()
-
         msg  = f"{icon} *إشارة {direction} {arrow}*\n"
         msg += f"━━━━━━━━━━━━━━━━\n"
         msg += f"🪙 الزوج: *{qx_sym}*\n"
         msg += f"📊 الاتجاه: *{direction}*\n"
         msg += f"⏱️ الانتهاء: *{expiry_time.strftime('%H:%M:%S')}* (2 دقيقة)\n"
         msg += f"💵 السعر: `{price:.{decimals}f}`\n"
-        msg += f"🧠 `SMA10xSMA20 + Stoch Cross`\n"
-        msg += f"🌍 الجلسة: *{session_name}*\n"
-        msg += f"📰 الأخبار: آمنة ✅\n"
+        msg += f"🧠 `تقاطع متتابع (مرحلتين)`\n"
         msg += f"━━━━━━━━━━━━━━━━"
 
         self.tg(msg)
-        self.log(f">>>> SIGNAL: {qx_sym} {direction} @ {price:.{decimals}f}")
-
-    # ================================================================
-    #                    إشعار تجاهل الإشارة
-    # ================================================================
-
-    def _notify_skipped(self, reason, detail=""):
-        """يرسل إشعار صامت عند تجاهل إشارة بسبب فلتر"""
-        now = self._get_time()
-        if reason == 'news':
-            self.log(f"⛔ BLOCKED by NEWS: {detail}")
-        elif reason == 'session':
-            self.stats['skipped_session'] += 1
+        self.log(f">>>> SIGNAL FIRED: {qx_sym} {direction} @ {price:.{decimals}f}")
 
     # ================================================================
     #                            التشغيل الرئيسي
     # ================================================================
 
     def run(self):
-        self.log("SNIPER V14 STARTED - Double Cross + Session + News Filter")
+        self.log("SNIPER V14 STARTED - Two-Stage Sequential Strategy")
         self.log(f"Monitoring {len(self.SYMBOLS_MAP)} pairs on 1-minute timeframe...")
-
-        # جلب الأخبار عند البدء
-        self._fetch_news()
+        self.log("========================================")
 
         while True:
             try:
                 self.stats['scans'] += 1
+                active_stages = 0
                 cycle_signals = 0
 
-                # === الفحص الأول: هل نحن في وقت تداول جيد؟ ===
-                is_session, session_name = self._is_good_session()
-                if not is_session:
-                    self._notify_skipped('session')
-                    # خارج أوقات التداول: ننتظر دقيقة ونرجع نتحقق
-                    time.sleep(60)
-                    continue
-
-                # === الفحص الثاني: هل هناك أخبار قريبة؟ ===
-                is_safe, news_title = self._is_news_safe()
-                if not is_safe:
-                    self.stats['skipped_news'] += 1
-                    self._notify_skipped('news', news_title)
-                    # أخبار قريبة: ننتظر 5 دقائق ونرجع نتحقق
-                    self.tg(
-                        f"⛔ *إشارات متوقفة مؤقتاً*\n"
-                        f"━━━━━━━━━━━━━━━━\n"
-                        f"📰 سبب: خبر قادم\n"
-                        f"📝 {news_title}\n"
-                        f"⏳ ستعود بعد 5 دقائق..."
-                    )
-                    time.sleep(300)
-                    continue
-
-                # === كل شيء جيد - نحلل الأزواج ===
                 for api_sym, qx_sym in self.SYMBOLS_MAP.items():
 
+                    # حماية الـ Cooldown بعد إشارة
                     if api_sym in self.last_signal_time:
                         if time.time() - self.last_signal_time[api_sym] < self.COOLDOWN_SEC:
                             continue
 
+                    # جلب البيانات
                     df = self._get_1m_data(api_sym)
                     if df is None:
                         continue
 
-                    direction, price = self._analyze_symbol(df)
+                    # التحليل بمرحلتيه
+                    direction, price, stage_msg = self._analyze_symbol(api_sym, qx_sym, df)
 
+                    # طباعة حالة كل زوج (مختصرة)
+                    if stage_msg:
+                        short_sym = api_sym.split('/')[0]
+                        if 'المرحلة1' in stage_msg or '🎯' in stage_msg or '⏰' in stage_msg:
+                            self.log(f"  [{short_sym}] {stage_msg}")
+                        elif self.stage_memory.get(api_sym):
+                            active_stages += 1
+
+                    # إطلاق الإشارة إذا اكتملت المرحلتين
                     if direction and price > 0:
                         self._send_signal(api_sym, qx_sym, direction, price)
                         cycle_signals += 1
 
-                    time.sleep(0.8)
+                    time.sleep(0.5)
 
-                # تقرير ساعة
+                # ملخص الدورة
+                self.log(f"--- دورة #{self.stats['scans']} | مراقب نشط: {active_stages} | إشارات: {cycle_signals} ---")
+
+                # تقرير ساعة لتيليجرام
                 if time.time() - self.report_time >= 3600:
                     self.tg(
-                        f"📊 *تقرير ساعة*\n"
+                        f"📊 *تقرير ساعة - V14*\n"
                         f"━━━━━━━━━━━━━━━━\n"
                         f"🔍 فحوصات: {self.stats['scans']}\n"
-                        f"🎯 إشارات: {self.stats['signals_sent']}\n"
-                        f"⛔ محجوبة (خارج جلسة): {self.stats['skipped_session']}\n"
-                        f"📰 محجوبة (أخبار): {self.stats['skipped_news']}\n"
+                        f"📍 مراحل أولى: {self.stats['stage1_hits']}\n"
+                        f"🎯 إشارات أُطلقت: {self.stats['signals_sent']}\n"
+                        f"⏳ مراقب نشط الآن: {active_stages}\n"
                         f"━━━━━━━━━━━━━━━━"
                     )
                     self.report_time = time.time()
-
-                if cycle_signals > 0:
-                    self.log(f"Cycle done - {cycle_signals} signal(s)")
-                else:
-                    self.log("Cycle done - no valid double-cross signals")
 
             except Exception as e:
                 self.log(f"MAIN LOOP ERR: {e}")
                 time.sleep(10)
 
-            # فحص كل 30 ثانية داخل أوقات التداول
+            # انتظار 30 ثانية
             time.sleep(30)
-
-    def _is_good_session(self):
-        now = datetime.datetime.now(self.TZ)
-        h, m = now.hour, now.minute
-        current_min = h * 60 + m
-
-        for start_h, start_m, end_h, end_m in self.GOOD_SESSIONS:
-            start_min = start_h * 60 + start_m
-            end_min = end_h * 60 + end_m
-            if start_min <= current_min < end_min:
-                return True, "لندن 🇬🇧" if start_h == 9 else "نيويورك 🇺🇸"
-
-        return False, None
 
 
 if __name__ == "__main__":
