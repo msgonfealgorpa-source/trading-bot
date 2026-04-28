@@ -1,0 +1,271 @@
+import time, pandas as pd, ta, datetime, os, sys, asyncio
+import aiohttp
+from zoneinfo import ZoneInfo
+
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
+class QuotexSniperBot:
+    """
+    بوت القناص V14.2 (Async + انقضاض الشمعة - Zero Lag)
+    ======================================================
+    - جلب البيانات بالتوازي (Asyncio + Aiohttp).
+    - توقيت ذكي: الفحص في آخر ثانيتين من الشمعة فقط.
+    - EMA 10/20 أسرع من SMA.
+    - فلاتر برايس أكشن (شمعة الابتلاع Engulfing).
+    """
+
+    def __init__(self):
+        self.tg_token = os.environ.get('TELEGRAM_TOKEN')
+        self.tg_chat = os.environ.get('CHAT_ID')
+
+        if not self.tg_token or not self.tg_chat:
+            print("[FATAL ERROR] Missing TELEGRAM_TOKEN or CHAT_ID!")
+            return
+
+        self.TZ = ZoneInfo("Africa/Tripoli")
+        self.session = None # سيتم إنشاؤه في Async
+
+        self.SYMBOLS_MAP = {
+            'BTC/USDT': 'BTCUSD(t)', 'ETH/USDT': 'ETHUSD(t)',
+            'BNB/USDT': 'BNBUSD(t)', 'SOL/USDT': 'SOLUSD(t)',
+            'XRP/USDT': 'XRPUSD(t)', 'DOGE/USDT': 'DOGEUSD(t)',
+            'ADA/USDT': 'ADAUSD(t)', 'EUR/USD': 'EUR/USD OTC',
+            'GBP/USD': 'GBP/USD OTC', 'USD/JPY': 'USD/JPY OTC',
+            'AUD/USD': 'AUD/USD OTC', 'USD/CAD': 'USD/CAD OTC',
+            'EUR/GBP': 'EUR/GBP OTC', 'NZD/USD': 'NZD/USD OTC',
+            'EUR/JPY': 'EUR/JPY OTC', 'GBP/CAD': 'GBP/CAD OTC',
+        }
+
+        self.stage_memory = {}
+        self.stage_time = {}
+        self.last_signal_time = {}
+        self.stats = {'signals_sent': 0, 'stage1_hits': 0, 'engulfing_hits': 0}
+        self.report_time = time.time()
+        self.COOLDOWN_SEC = 180
+        self.STAGE_TIMEOUT = 900
+
+    def _get_time(self):
+        return datetime.datetime.now(self.TZ).strftime("%H:%M:%S")
+
+    async def tg(self, msg):
+        try:
+            url = f"https://api.telegram.org/bot{self.tg_token}/sendMessage"
+            payload = {'chat_id': self.tg_chat, 'text': msg, 'parse_mode': 'Markdown'}
+            async with self.session.post(url, data=payload, timeout=5) as resp:
+                pass
+        except:
+            pass
+
+    def log(self, msg):
+        ts = self._get_time()
+        print(f"[{ts}] {msg}")
+
+    # ================================================================
+    #    جلب البيانات (Async) - التوازي السحري
+    # ================================================================
+
+    async def _fetch_single(self, sym, session):
+        base, quote = sym.split('/')
+        url = "https://min-api.cryptocompare.com/data/v2/histominute"
+        params = {'fsym': base, 'tsym': quote, 'limit': 30} # 30 شمعة فقط
+        try:
+            async with session.get(url, params=params, timeout=5) as resp:
+                d = await resp.json()
+                if d.get('Response') == 'Success':
+                    raw = d.get('Data', {}).get('Data', [])
+                    if raw:
+                        df = pd.DataFrame(raw, columns=['time', 'open', 'high', 'low', 'close', 'volumeto'])
+                        df['time'] = pd.to_datetime(df['time'], unit='ms')
+                        return sym, df
+        except:
+            pass
+        return sym, None
+
+    async def _get_all_data_parallel(self):
+        tasks = [self._fetch_single(sym, self.session) for sym in self.SYMBOLS_MAP.keys()]
+        # جلب كل الأزواج في نفس اللحظة (أقل من ثانية)
+        results = await asyncio.gather(*tasks)
+        return {sym: df for sym, df in results if df is not None}
+
+    # ================================================================
+    #   استراتيجية V14.2 (EMA + Stoch + Engulfing)
+    # ================================================================
+
+    def _analyze_symbol(self, api_sym, df):
+        if df is None or len(df) < 25: return None, 0, ""
+
+        try:
+            df = df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'}).copy()
+
+            # 1. EMA بدل SMA (أسرع استجابة)
+            df['ema10'] = ta.trend.ema_indicator(df['Close'], window=10)
+            df['ema20'] = ta.trend.ema_indicator(df['Close'], window=20)
+
+            # 2. Stochastic
+            stoch = ta.momentum.StochasticOscillator(high=df['High'], low=df['Low'], close=df['Close'], window=14, smooth_window=3)
+            df['stoch_k'] = stoch.stoch()
+
+            cur = df.iloc[-1]
+            prev = df.iloc[-2]
+            price = cur['Close']
+
+            if pd.isna(cur['ema10']) or pd.isna(cur['stoch_k']): return None, price, ""
+
+            now = time.time()
+            if api_sym in self.stage_memory and self.stage_memory[api_sym] is not None:
+                if now - self.stage_time.get(api_sym, 0) > self.STAGE_TIMEOUT:
+                    self.stage_memory[api_sym] = None
+
+            stoch_k_cur = cur['stoch_k']
+
+            # --- المرحلة 1: الستوكاستيك ---
+            if (stoch_k_cur > 70 and self.stage_memory.get(api_sym) != 'PUT_READY'):
+                self.stage_memory[api_sym] = 'PUT_READY'
+                self.stage_time[api_sym] = now
+                self.stats['stage1_hits'] += 1
+                return None, price, "🔴 مرحلة1 (ستوك فوق 70)"
+
+            if (stoch_k_cur < 30 and self.stage_memory.get(api_sym) != 'CALL_READY'):
+                self.stage_memory[api_sym] = 'CALL_READY'
+                self.stage_time[api_sym] = now
+                self.stats['stage1_hits'] += 1
+                return None, price, "🟢 مرحلة1 (ستوك تحت 30)"
+
+            # --- المرحلة 2: التقاطع + برايس أكشن (الابتلاعية) ---
+            current_stage = self.stage_memory.get(api_sym)
+            
+            # حساب شمعة الابتلاع (Engulfing)
+            # PUT: شمعة حمراء تبتلع خضراء
+            is_bearish_engulfing = (cur['Close'] < cur['Open']) and (prev['Close'] > prev['Open']) and (cur['Open'] >= prev['Close']) and (cur['Close'] <= prev['Open'])
+            # CALL: شمعة خضراء تبتلع حمراء
+            is_bullish_engulfing = (cur['Close'] > cur['Open']) and (prev['Close'] < prev['Open']) and (cur['Open'] <= prev['Close']) and (cur['Close'] >= prev['Open'])
+
+            confirmation = "تقاطع عادي"
+
+            if current_stage == 'PUT_READY':
+                cross_down = (prev['ema10'] >= prev['ema20']) and (cur['ema10'] < cur['ema20'])
+                if cross_down:
+                    self.stage_memory[api_sym] = None
+                    if is_bearish_engulfing:
+                        confirmation = "تقاطع + شمعة ابتلاعية 🔥"
+                        self.stats['engulfing_hits'] += 1
+                    return 'PUT', price, confirmation
+                    
+            elif current_stage == 'CALL_READY':
+                cross_up = (prev['ema10'] <= prev['ema20']) and (cur['ema10'] > cur['ema20'])
+                if cross_up:
+                    self.stage_memory[api_sym] = None
+                    if is_bullish_engulfing:
+                        confirmation = "تقاطع + شمعة ابتلاعية 🔥"
+                        self.stats['engulfing_hits'] += 1
+                    return 'CALL', price, confirmation
+
+        except Exception as e:
+            return None, 0, f"خطأ: {str(e)[:20]}"
+
+        return None, 0, ""
+
+    # ================================================================
+    #                            إرسال الإشارة
+    # ================================================================
+
+    async def _send_signal(self, api_sym, qx_sym, direction, price, confirmation):
+        self.stats['signals_sent'] += 1
+        self.last_signal_time[api_sym] = time.time()
+
+        icon = "🟢" if direction == 'CALL' else "🔴"
+        arrow = "⬆️" if direction == 'CALL' else "⬇️"
+        now_libya = datetime.datetime.now(self.TZ)
+        expiry_time = now_libya + datetime.timedelta(minutes=2)
+        decimals = 5 if 'USD' in api_sym and 'USDT' not in api_sym else 2
+
+        msg  = f"⚡ *إشارة {direction} {arrow}*\n"
+        msg += f"━━━━━━━━━━━━━━━━\n"
+        msg += f"🪙 الزوج: *{qx_sym}*\n"
+        msg += f"⏱️ الانتهاء: *{expiry_time.strftime('%H:%M:%S')}*\n"
+        msg += f"💵 السعر: `{price:.{decimals}f}`\n"
+        msg += f"🔑 التأكيد: *{confirmation}*\n"
+        msg += f"🧠 EMA10/20 + Stoch Filter\n"
+        msg += f"━━━━━━━━━━━━━━━━"
+        
+        await self.tg(msg)
+        self.log(f">>>> SIGNAL: {qx_sym} {direction} | {confirmation}")
+
+    # ================================================================
+    #               التشغيل الرئيسي (التوقيت الذكي)
+    # ================================================================
+
+    async def run(self):
+        # إنشاء Session لـ Async
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as self.session:
+            
+            await self.tg("⚡ *بوت القناص V14.2 (Async)*\n━━━━━━━━━━━━━━━━\n🚀 تم تفعيل:\n- جلب التوازي (Async)\n- مؤشر EMA السريع\n- فلاتر شموع الابتلاع\n- الفحص الذكي (آخر ثانيتين)\n━━━━━━━━━━━━━━━━\n⏳ ينتظر بداية الشمعة القادمة...")
+            
+            self.log("SNIPER V14.2 STARTED - Smart Clock Synced")
+
+            while True:
+                try:
+                    now_libya = datetime.datetime.now(self.TZ)
+                    current_second = now_libya.second
+                    
+                    # ==========================================
+                    # 🧠 التوقيت الذكي (السحر الحقيقي)
+                    # ==========================================
+                    # نحسب كم ثانية باقية على نهاية الشمعة
+                    sec_left = 60 - current_second - (now_libya.microsecond / 1_000_000)
+
+                    if sec_left > 2:
+                        # البوت ينام ولا يستهلك بيانات حتى تأتي الثانية 58
+                        self.log(f"⏳ انتظار ذكي... باقي {int(sec_left)-2} ثانية على فحص الشمعة.")
+                        await asyncio.sleep(sec_left - 2)
+                        continue
+
+                    # نحن الآن في الثواني (58 أو 59 أو 00) - وقت الانقضاض!
+                    self.log("🔥 [الثانية 58] جلب البيانات بالتوازي وتحليل الأزواج...")
+                    
+                    # 1. جلب كل البيانات في لحظة واحدة
+                    data_dict = await self._get_all_data_parallel()
+                    
+                    # 2. تحليل الإشارات
+                    tasks_to_fire = []
+                    for api_sym, df in data_dict.items():
+                        if api_sym in self.last_signal_time:
+                            if time.time() - self.last_signal_time[api_sym] < self.COOLDOWN_SEC:
+                                continue
+
+                        direction, price, confirmation = self._analyze_symbol(api_sym, df)
+                        
+                        if direction and price > 0:
+                            qx_sym = self.SYMBOLS_MAP[api_sym]
+                            tasks_to_fire.append(self._send_signal(api_sym, qx_sym, direction, price, confirmation))
+
+                    # 3. إرسال الإشارات المكتشفة
+                    if tasks_to_fire:
+                        await asyncio.gather(*tasks_to_fire)
+                    else:
+                        self.log("✅ تم فحص الشمعة - لا توجد شروط مستوفاة.")
+
+                    # تقرير ساعة
+                    if time.time() - self.report_time >= 3600:
+                        await self.tg(
+                            f"📊 *تقرير V14.2 (ساعة)*\n━━━━━━━━━━━━━━━━\n"
+                            f"📍 مراحل أولى (ستوك): {self.stats['stage1_hits']}\n"
+                            f"🔥 شموع ابتلاعية: {self.stats['engulfing_hits']}\n"
+                            f"🎯 إشارات نهائية: {self.stats['signals_sent']}\n━━━━━━━━━━━━━━━━"
+                        )
+                        self.report_time = time.time()
+
+                    # انتظار بسيط لتجاوز الثانية 00 وعدم تكرار فحص نفس الشمعة
+                    await asyncio.sleep(3)
+
+                except Exception as e:
+                    self.log(f"ERR: {e}")
+                    await asyncio.sleep(10)
+
+
+if __name__ == "__main__":
+    bot = QuotexSniperBot()
+    if bot.tg_token:
+        asyncio.run(bot.run())
