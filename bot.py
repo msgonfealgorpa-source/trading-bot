@@ -143,7 +143,7 @@ class QuotexSniperBot:
         now = self._get_time()
         return now.hour * 60 + now.minute
 
-        def _get_next_slot_time(self):
+    def _get_next_slot_time(self):
         current_mins = self._get_current_slot_minutes()
         # البحث عن أقرب جلسة قادمة في نفس اليوم
         for slot in self.all_slots:
