@@ -34,12 +34,11 @@ class QuotexSniperBot:
         }
 
         # ===== إعدادات الجلسات (بالوقت المحلي ليبيا) =====
-        # تحويل الأوقات إلى دقائق (08:00 = 480 دقيقة)
         self.morning_slots = [480, 510, 540, 570, 600] # 08:00, 08:30, 09:00, 09:30, 10:00
         self.evening_slots = [1020, 1050, 1080, 1110, 1140] # 17:00, 17:30, 18:00, 18:30, 19:00
         self.all_slots = self.morning_slots + self.evening_slots
 
-        self.completed_windows = set() # لتتبع النوافذ اللي تم إطلاق إشارة فيها
+        self.completed_windows = set()
         self.daily_signal_count = 0
         self.current_day = datetime.datetime.now(self.TZ).day
 
@@ -51,7 +50,7 @@ class QuotexSniperBot:
         self.COOLDOWN_SEC = 180
         self.STAGE_TIMEOUT = 900
         
-        self.last_checked_minute = -1 # لمنع فحص نفس الدقيقة مرتين
+        self.last_checked_minute = -1
 
         msg  = "🧠 *بوت القناص V16 (المنظم)*\n"
         msg += "━━━━━━━━━━━━━━━━\n"
@@ -59,7 +58,7 @@ class QuotexSniperBot:
         msg += "☀️ صباحي: 08:00 - 10:00 (5 إشارات)\n"
         msg += "🌙 مسائي: 17:00 - 19:00 (5 إشارات)\n"
         msg += "⏱️ الفاصل: نصف ساعة بين كل إشارة\n"
-        msg += "🚀 وضع الاستراحة مفعل..."
+        msg += "🚀 تم إصلاح الخطأ البرمجي..."
         self.tg(msg)
 
     def _get_time(self):
@@ -68,7 +67,7 @@ class QuotexSniperBot:
     def _get_time_str(self):
         return self._get_time().strftime("%H:%M:%S")
 
-    async def tg(self, msg):
+    def tg(self, msg):
         try:
             requests.post(
                 f"https://api.telegram.org/bot{self.tg_token}/sendMessage",
@@ -81,10 +80,6 @@ class QuotexSniperBot:
     def log(self, msg):
         print(f"[{self._get_time_str()}] {msg}")
 
-    # ================================================================
-    #               حساب أوقات النوم والانتظار
-    # ================================================================
-
     def _get_current_slot_minutes(self):
         now = self._get_time()
         return now.hour * 60 + now.minute
@@ -94,7 +89,6 @@ class QuotexSniperBot:
         for slot in self.all_slots:
             if slot > current_mins:
                 return slot
-        # إذا انتهت كل الأوقات، انتظر صباح اليوم التالي
         return self.morning_slots[0] + (24 * 60)
 
     def _get_session_name(self, slot_mins):
@@ -104,10 +98,6 @@ class QuotexSniperBot:
         else:
             idx = self.evening_slots.index(slot_mins) + 1
             return f"🌙 مسائية - النافذة {idx}/5"
-
-    # ================================================================
-    #    جلب البيانات وتحليلها (نفس المنطق المُصلح سابقاً)
-    # ================================================================
 
     def _fetch_single(self, sym):
         base, quote = sym.split('/')
@@ -159,7 +149,6 @@ class QuotexSniperBot:
 
             stoch_k_cur = cur['stoch_k']
 
-            # المرحلة 1
             if (stoch_k_cur > 70 and self.stage_memory.get(api_sym) != 'PUT_READY'):
                 self.stage_memory[api_sym] = 'PUT_READY'
                 self.stage_time[api_sym] = now
@@ -170,7 +159,6 @@ class QuotexSniperBot:
                 self.stage_time[api_sym] = now
                 self.stats['stage1_hits'] += 1
 
-            # المرحلة 2
             current_stage = self.stage_memory.get(api_sym)
 
             if current_stage == 'PUT_READY':
@@ -209,14 +197,10 @@ class QuotexSniperBot:
         msg += f"━━━━━━━━━━━━━━━━"
         
         self.tg(msg)
-        self.log(f">>>> SIGNAL FIRED: {qx_sym} {direction} | {session_name}")
-
-    # ================================================================
-    #               التشغيل الرئيسي (المنظم)
-    # ================================================================
+        self.log(f">>>> SIGNAL: {qx_sym} {direction} | {session_name}")
 
     def run(self):
-        self.log("SNIPER V16 STARTED - Organized Scheduler Active")
+        self.log("SNIPER V16 STARTED - Organized & Fixed")
         self.log("========================================")
 
         while True:
@@ -230,17 +214,17 @@ class QuotexSniperBot:
                     self.current_day = now.day
                     self.daily_signal_count = 0
                     self.completed_windows = set()
-                    self.stage_memory = {} # مسح ذاكرة المرحلة الأولى لليوم الجديد
+                    self.stage_memory = {} 
                     self.log("🔄 يوم جديد! تم إعادة تعيين العداد (0/10).")
                     self.tg("🌅 *صباح الخير*\n━━━━━━━━━━━━━━━━\n🔄 بدء يوم جديد\nالهدف: 10 إشارات دقيقة\n━━━━━━━━━━━━━━━━")
 
                 # 2. إذا أكملنا 10 إشارات، خذ استراحة حتى الصباح
                 if self.daily_signal_count >= 10:
                     if current_mins < self.morning_slots[0]:
-                        pass # لا تزال في فترة الصباح، استمر لأسفل
+                        pass 
                     else:
-                        self.log("🏆 تم إنجاز هدف الـ 10 إشارات! البوت في استراحة حتى الغد...")
-                        time.sleep(300) # نم 5 دقائق ثم افحص مرة أخرى
+                        self.log("🏆 تم إنجاز الهدف! البوت في استراحة حتى الغد...")
+                        time.sleep(300) 
                         continue
 
                 # 3. البحث عن النافذة الحالية
@@ -257,8 +241,8 @@ class QuotexSniperBot:
                     next_min = next_slot_mins % 60
                     session_name = self._get_session_name(next_slot_mins)
                     
-                    # Log every 15 mins
-                    if current_min % 15 == 0 and current_sec < 2:
+                    # تم إصلاح الخطأ هنا (استبدال current_min بـ current_mins)
+                    if current_mins % 15 == 0 and current_sec < 2:
                         self.log(f"⏳ استراحة... الجلسة القادمة: {session_name} الساعة {next_hour:02d}:{next_min:02d}")
                     
                     time.sleep(60)
@@ -269,23 +253,20 @@ class QuotexSniperBot:
                     next_slot_mins = self._get_next_slot_time()
                     next_hour = next_slot_mins // 60
                     next_min = next_slot_mins % 60
-                    session_name = self._get_session_name(next_slot_mins)
                     
-                    # نم حتى بداية النافذة التالية
                     sleep_sec = (next_slot_mins - current_mins) * 60 - current_sec
                     self.log(f"✅ تم إطلاق إشارة في هذه النافذة. النوم حتى {next_hour:02d}:{next_min:02d}...")
                     time.sleep(max(sleep_sec, 10))
                     continue
 
-                # 6. نحن الآن في نافذة صالحة ولم نطلق إشارة بعد
+                # 6. نحن الآن في نافذة صالحة
                 session_name = self._get_session_name(current_slot)
                 
-                # الفحص الديناميكي: نفحص في الثواني (55 إلى 05) من كل دقيقة
+                # الفحص الديناميكي: نفحص في الثواني (55 إلى 05)
                 if not (current_sec >= 55 or current_sec <= 5):
                     time.sleep(1)
                     continue
 
-                # منع الفحص لنفس الدقيقة مرتين
                 if current_mins == self.last_checked_minute and current_sec >= 5:
                     time.sleep(1)
                     continue
@@ -293,7 +274,6 @@ class QuotexSniperBot:
                 self.last_checked_minute = current_mins
                 self.log(f"🔍 فحص نشط... ({session_name})")
 
-                # جلب وتحليل البيانات
                 data_dict = self._get_all_data_parallel()
                 
                 for api_sym, df in data_dict.items():
@@ -306,8 +286,8 @@ class QuotexSniperBot:
                     if direction and price > 0:
                         qx_sym = self.SYMBOLS_MAP[api_sym]
                         self._send_signal(api_sym, qx_sym, direction, price, confirmation, session_name)
-                        self.completed_windows.add(current_slot) # قفل هذه النافذة
-                        break # أوقف البحث عن إشارات أخرى في هذه النافذة
+                        self.completed_windows.add(current_slot)
+                        break 
 
                 time.sleep(2)
 
