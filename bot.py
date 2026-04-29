@@ -143,12 +143,14 @@ class QuotexSniperBot:
         now = self._get_time()
         return now.hour * 60 + now.minute
 
-    def _get_next_slot_time(self):
+        def _get_next_slot_time(self):
         current_mins = self._get_current_slot_minutes()
+        # البحث عن أقرب جلسة قادمة في نفس اليوم
         for slot in self.all_slots:
             if slot > current_mins:
                 return slot
-        return self.morning_slots[0] + (24 * 60)
+        # إذا لم يجد (يعني انتهت جلسات اليوم)، نعود لأول جلسة في صباح اليوم التالي (480 = 08:00)
+        return self.morning_slots[0]
 
     def _get_session_name(self, slot_mins):
         if slot_mins in self.morning_slots:
