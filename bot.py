@@ -9,9 +9,10 @@ class QuotexSniperBot:
     بوت القناص V17 (النسخة النهائية - TwelveData & Engulfing)
     =============================================================
     - مصدر البيانات: Twelve Data API (فوركس حقيقي).
-    - فلتر إلزامي: شمعة الابتلاعية (Engulfing).
+    - فلتر إلزامي: شمعة الابتلاعية (Engulfing) - فلتر مرن.
     - نظام توقيت دقيق: الإشارة في الثانية 58.
-    - محترم للحدود المجانية: 8 طلبات كحد أقصى في الدقيقة.
+    - نظام Dash: تحديث فوري لجميع الأزواج في الثانية 55 لمنع (Stale Data).
+    - محترم للحدود المجانية: ~150 طلب كحد أقصى في اليوم.
     """
 
     def __init__(self):
@@ -59,6 +60,7 @@ class QuotexSniperBot:
         self.STAGE_TIMEOUT = 900
         
         self.last_checked_minute = -1
+        self.last_dash_minute = -1 # متغير جديد لمنع تكرار الـ Dash
 
         # متغيرات نظام التحديث الخلفي للبيانات (Background Fetcher)
         self.latest_data = {}
@@ -145,11 +147,9 @@ class QuotexSniperBot:
 
     def _get_next_slot_time(self):
         current_mins = self._get_current_slot_minutes()
-        # البحث عن أقرب جلسة قادمة في نفس اليوم
         for slot in self.all_slots:
             if slot > current_mins:
                 return slot
-        # إذا لم يجد (يعني انتهت جلسات اليوم)، نعود لأول جلسة في صباح اليوم التالي (480 = 08:00)
         return self.morning_slots[0]
 
     def _get_session_name(self, slot_mins):
@@ -161,7 +161,26 @@ class QuotexSniperBot:
             return f"🌙 مسائية - النافذة {idx}/5"
 
     # ================================================================
-    #      الاستراتيجية (ستوكاستيك + تقاطع + ابتلاعية إلزامية)
+    #           درع حماية الـ API (API Shield)
+    # ================================================================
+
+    def _is_preheating_window(self, current_mins):
+        """
+        يعمل فقط في الدقيقة السابقة مباشرة للنافذة (تمهيد).
+        يتوقف تماماً عند بدء النافذة ليفسح المجال لنظام الـ Dash.
+        """
+        if self.daily_signal_count >= 10:
+            return False
+        for slot in self.all_slots:
+            if slot in self.completed_windows:
+                continue
+            # فقط الدقيقة التي تسبق النافذة مباشرة
+            if (slot - 1) == current_mins:
+                return True
+        return False
+
+    # ================================================================
+    #      الاستراتيجية (ستوكاستيك + تقاطع + ابتلاعية مرنة)
     # ================================================================
 
     def _analyze_symbol(self, api_sym, df):
@@ -198,9 +217,36 @@ class QuotexSniperBot:
                 self.stage_time[api_sym] = now
                 self.stats['stage1_hits'] += 1
 
-            # حساب الشمعة الابتلاعية (Engulfing)
-            is_bearish_engulfing = (cur['Close'] < cur['Open']) and (prev['Close'] > prev['Open']) and (cur['Open'] >= prev['Close']) and (cur['Close'] <= prev['Open'])
-            is_bullish_engulfing = (cur['Close'] > cur['Open']) and (prev['Close'] < prev['Open']) and (cur['Open'] <= prev['Close']) and (cur['Close'] >= prev['Open'])
+            # حساب الشموع الابتلاعية (Engulfing) - فلتر مرن
+            is_bearish_engulfing = False
+            is_bullish_engulfing = False
+
+            prev_body_high = max(prev['Open'], prev['Close'])
+            prev_body_low = min(prev['Open'], prev['Close'])
+            prev_body_size = prev_body_high - prev_body_low
+
+            cur_body_high = max(cur['Open'], cur['Close'])
+            cur_body_low = min(cur['Open'], cur['Close'])
+            cur_body_size = cur_body_high - cur_body_low
+
+            # استبعاد الـ Doji (أجسام صفرية)
+            if prev_body_size > 0 and cur_body_size > 0:
+
+                # هبوطي: شمعة حمراء تبتلع خضراء سابقة
+                if cur['Close'] < cur['Open'] and prev['Close'] > prev['Open']:
+                    overlap_top = min(cur['Open'], prev_body_high)
+                    overlap_bottom = max(cur['Close'], prev_body_low)
+                    if overlap_top > overlap_bottom:
+                        overlap_ratio = (overlap_top - overlap_bottom) / prev_body_size
+                        is_bearish_engulfing = overlap_ratio >= 0.5
+
+                # صعودي: شمعة خضراء تبتلع حمراء سابقة
+                if cur['Close'] > cur['Open'] and prev['Close'] < prev['Open']:
+                    overlap_top = min(cur['Close'], prev_body_high)
+                    overlap_bottom = max(cur['Open'], prev_body_low)
+                    if overlap_top > overlap_bottom:
+                        overlap_ratio = (overlap_top - overlap_bottom) / prev_body_size
+                        is_bullish_engulfing = overlap_ratio >= 0.5
 
             # المرحلة 2 (لا يتم إطلاق الإشارة إلا بتوافر الابتلاعية مع التقاطع)
             current_stage = self.stage_memory.get(api_sym)
@@ -259,15 +305,17 @@ class QuotexSniperBot:
                 current_sec = now.second
 
                 # ==========================================
-                # 0. محرك تحديث البيانات الخلفي (8 ثواني بين كل طلب)
+                # 0. مرحلة التمهيد فقط (Pre-heat)
+                #    يعمل في الدقيقة السابقة للنافذة فقط
                 # ==========================================
                 if time.time() - self.last_api_call_time >= 8:
-                    sym_to_fetch = self.pair_list[self.api_cycle_index % len(self.pair_list)]
-                    df = self._fetch_twelve_data(sym_to_fetch)
-                    if df is not None:
-                        self.latest_data[sym_to_fetch] = df
-                    self.api_cycle_index += 1
-                    self.last_api_call_time = time.time()
+                    if self._is_preheating_window(current_mins):
+                        sym_to_fetch = self.pair_list[self.api_cycle_index % len(self.pair_list)]
+                        df = self._fetch_twelve_data(sym_to_fetch)
+                        if df is not None:
+                            self.latest_data[sym_to_fetch] = df
+                        self.api_cycle_index += 1
+                        self.last_api_call_time = time.time()
 
                 # ==========================================
                 # 1. إعادة تعيين العداد في منتصف الليل
@@ -281,7 +329,7 @@ class QuotexSniperBot:
                     self.tg("🌅 *صباح الخير*\n━━━━━━━━━━━━━━━━\n🔄 بدء يوم جديد\nالهدف: 10 إشارات دقيقة\n━━━━━━━━━━━━━━━━")
 
                 # ==========================================
-                # 2. إذا أكملنا 10 إشارات (استراحة مع بقاء التحديث)
+                # 2. إذا أكملنا 10 إشارات (استراحة)
                 # ==========================================
                 if self.daily_signal_count >= 10:
                     if current_mins < self.morning_slots[0]:
@@ -289,7 +337,7 @@ class QuotexSniperBot:
                     else:
                         if current_mins % 15 == 0 and current_sec < 2:
                             self.log("🏆 تم إنجاز الهدف! البوت في استراحة حتى الغد...")
-                        time.sleep(10) # نوم قصير لنبقي محرك البيانات يعمل
+                        time.sleep(10)
                         continue
 
                 # ==========================================
@@ -324,7 +372,20 @@ class QuotexSniperBot:
                     continue
 
                 # ==========================================
-                # 6. نحن في نافذة صالحة - الفحص في الثانية 58 فقط
+                # 6. سد ثغرة البيانات القديمة (The Dash)
+                #    في الثانية 55: سحب فوري لجميع الأزواج دفعة واحدة
+                # ==========================================
+                if current_sec == 55 and current_mins != self.last_dash_minute:
+                    self.last_dash_minute = current_mins
+                    self.log(f"⚡ [الثانية 55] تحديث فوري لجميع الأزواج (Dash)...")
+                    for api_sym in self.pair_list:
+                        df = self._fetch_twelve_data(api_sym)
+                        if df is not None:
+                            self.latest_data[api_sym] = df
+
+                # ==========================================
+                # 7. نحن في نافذة صالحة - الفحص في الثانية 58 فقط
+                #    (البيانات الآن طازجة بـ 3 ثوانٍ فقط)
                 # ==========================================
                 session_name = self._get_session_name(current_slot)
                 
@@ -349,7 +410,7 @@ class QuotexSniperBot:
                                 self.completed_windows.add(current_slot)
                                 break 
 
-                time.sleep(1) # دورة سريعة جداً لضمان عدم تفويت الثانية 58
+                time.sleep(1) 
 
             except Exception as e:
                 self.log(f"ERR: {e}")
