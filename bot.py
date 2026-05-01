@@ -1,4 +1,5 @@
 import time, pandas as pd, ta, requests, datetime, os, sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from zoneinfo import ZoneInfo
 
 if hasattr(sys.stdout, 'reconfigure'):
@@ -6,45 +7,35 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 class QuotexSniperBot:
     """
-    بوت القناص V17.2 (النسخة المصححة - بدون الابتلاعية)
-    =============================================================
-    - مصدر البيانات: Twelve Data API (فوركس حقيقي).
-    - الاستراتيجية: استوكاستيك + تقاطع الموفينجات (EMA 10/20) فقط.
-    - نظام توقيت دقيق: الإشارة في الثانية 58.
-    - نظام السحب المتدرج: تحديث الأزواج بين الثانية 45 و 56 لمنع تجميد البوت.
-    - محترم للحدود المجانية: ~150 طلب كحد أقصى في اليوم.
+    بوت القناص V16 (النسخة المنظمة - 10 إشارات يومياً)
+    ======================================================
+    - جلسة صباحية: 5 إشارات (تبدأ 08:00 كل نصف ساعة)
+    - جلسة مسائية: 5 إشارات (تبدأ 17:00 كل نصف ساعة)
+    - إصلاح خلل التوقيت (فحص ديناميكي بدل النوم الثابت)
     """
 
     def __init__(self):
         self.tg_token = os.environ.get('TELEGRAM_TOKEN')
         self.tg_chat = os.environ.get('CHAT_ID')
-        self.twelve_api_key = os.environ.get('TWELVE_DATA_API_KEY')
 
         if not self.tg_token or not self.tg_chat:
             print("[FATAL ERROR] Missing TELEGRAM_TOKEN or CHAT_ID!")
             return
-        if not self.twelve_api_key:
-            print("[FATAL ERROR] Missing TWELVE_DATA_API_KEY!")
-            return
 
         self.TZ = ZoneInfo("Africa/Tripoli")
 
-        # أزواج الفوركس الحقيقية فقط (بدون OTC)
         self.SYMBOLS_MAP = {
-            'EUR/USD': 'EUR/USD',
-            'GBP/JPY': 'GBP/JPY',
-            'USD/CAD': 'USD/CAD',
-            'EUR/GBP': 'EUR/GBP',
-            'USD/CHF': 'USD/CHF',
-            'AUD/USD': 'AUD/USD',
-            'GBP/USD': 'GBP/USD'
+            'EUR/CHF': 'EUR/CHF OTC', 'EUR/GBP': 'EUR/GBP OTC',
+            'AUD/CAD': 'AUD/CAD OTC', 'AUD/CHF': 'AUD/CHF OTC',
+            'NZD/CAD': 'NZD/CAD OTC', 'EUR/AUD': 'EUR/AUD OTC',
+            'GBP/CAD': 'GBP/CAD OTC', 'GBP/CHF': 'GBP/CHF OTC',
+            'EUR/CAD': 'EUR/CAD OTC', 'AUD/NZD': 'AUD/NZD OTC',
+            'NZD/CHF': 'NZD/CHF OTC', 'CAD/CHF': 'CAD/CHF OTC',
         }
 
-        self.pair_list = list(self.SYMBOLS_MAP.keys())
-
-        # ===== إعدادات الجلسات =====
-        self.morning_slots = [480, 510, 540, 570, 600]
-        self.evening_slots = [1020, 1050, 1080, 1110, 1140]
+        # ===== إعدادات الجلسات (بالوقت المحلي ليبيا) =====
+        self.morning_slots = [480, 510, 540, 570, 600] # 08:00, 08:30, 09:00, 09:30, 10:00
+        self.evening_slots = [1020, 1050, 1080, 1110, 1140] # 17:00, 17:30, 18:00, 18:30, 19:00
         self.all_slots = self.morning_slots + self.evening_slots
 
         self.completed_windows = set()
@@ -60,32 +51,15 @@ class QuotexSniperBot:
         self.STAGE_TIMEOUT = 900
         
         self.last_checked_minute = -1
-        self.last_dash_minute = -1 
 
-        # متغيرات نظام التحديث
-        self.latest_data = {}
-        self.api_cycle_index = 0
-        self.last_api_call_time = 0
-        
-        # متغير لمنع تكرار السحب للزوج في نفس الدقيقة
-        self.fetched_this_minute = {}
-
-        # اختبار الاتصال عند الإطلاق
-        if self._test_connection():
-            self.log("Connected to TwelveData Successfully")
-            msg  = "🧠 *بوت القناص V17.2*\n"
-            msg += "━━━━━━━━━━━━━━━━\n"
-            msg += "✅ تم الاتصال بـ TwelveData\n"
-            msg += "📈 7 أزواج فوركس حقيقية\n"
-            msg += "⚡ فلتر الشموع الابتلاعية: مُلغى ❌\n"
-            msg += "📅 الصباح: 08:00 - 10:00\n"
-            msg += "📅 المساء: 17:00 - 19:00\n"
-            msg += "━━━━━━━━━━━━━━━━\n"
-            msg += "🚀 الاستراتيجية: استوكاستيك + تقاطع EMA فقط..."
-            self.tg(msg)
-        else:
-            self.log("Failed to connect to TwelveData!")
-            self.tg("❌ *فشل الاتصال*\n━━━━━━━━━━━━━━━━\nتأكد من صحة `TWELVE_DATA_API_KEY`")
+        msg  = "🧠 *بوت القناص V16 (المنظم)*\n"
+        msg += "━━━━━━━━━━━━━━━━\n"
+        msg += "📅 الجدول اليومي:\n"
+        msg += "☀️ صباحي: 08:00 - 10:00 (5 إشارات)\n"
+        msg += "🌙 مسائي: 17:00 - 19:00 (5 إشارات)\n"
+        msg += "⏱️ الفاصل: نصف ساعة بين كل إشارة\n"
+        msg += "🚀 تم إصلاح الخطأ البرمجي..."
+        self.tg(msg)
 
     def _get_time(self):
         return datetime.datetime.now(self.TZ)
@@ -106,44 +80,6 @@ class QuotexSniperBot:
     def log(self, msg):
         print(f"[{self._get_time_str()}] {msg}")
 
-    # ================================================================
-    #                   الربط بـ Twelve Data
-    # ================================================================
-
-    def _test_connection(self):
-        sym = self.pair_list[0]
-        df = self._fetch_twelve_data(sym)
-        if df is not None:
-            self.latest_data[sym] = df
-            return True
-        return False
-
-    def _fetch_twelve_data(self, sym):
-        url = "https://api.twelvedata.com/time_series"
-        params = {
-            'symbol': sym,
-            'interval': '1min',
-            'outputsize': 30,
-            'apikey': self.twelve_api_key
-        }
-        try:
-            r = requests.get(url, params=params, timeout=5)
-            d = r.json()
-            if 'values' in d and len(d['values']) >= 25:
-                raw = d['values']
-                raw.reverse() 
-                df = pd.DataFrame(raw, columns=['datetime', 'open', 'high', 'low', 'close'])
-                df['time'] = pd.to_datetime(df['datetime'])
-                df = df.drop(columns=['datetime'])
-                return df
-        except Exception as e:
-            self.log(f"API Err {sym}: {str(e)[:30]}")
-        return None
-
-    # ================================================================
-    #               أدوات الجدولة الزمنية
-    # ================================================================
-
     def _get_current_slot_minutes(self):
         now = self._get_time()
         return now.hour * 60 + now.minute
@@ -153,7 +89,7 @@ class QuotexSniperBot:
         for slot in self.all_slots:
             if slot > current_mins:
                 return slot
-        return self.morning_slots[0]
+        return self.morning_slots[0] + (24 * 60)
 
     def _get_session_name(self, slot_mins):
         if slot_mins in self.morning_slots:
@@ -163,26 +99,32 @@ class QuotexSniperBot:
             idx = self.evening_slots.index(slot_mins) + 1
             return f"🌙 مسائية - النافذة {idx}/5"
 
-    # ================================================================
-    #            درع حماية الـ API (API Shield)
-    # ================================================================
+    def _fetch_single(self, sym):
+        base, quote = sym.split('/')
+        url = "https://min-api.cryptocompare.com/data/v2/histominute"
+        params = {'fsym': base, 'tsym': quote, 'limit': 30}
+        try:
+            r = requests.get(url, params=params, timeout=5)
+            d = r.json()
+            if d.get('Response') == 'Success':
+                raw = d.get('Data', {}).get('Data', [])
+                if raw:
+                    df = pd.DataFrame(raw, columns=['time', 'open', 'high', 'low', 'close', 'volumeto'])
+                    df['time'] = pd.to_datetime(df['time'], unit='ms')
+                    return sym, df
+        except:
+            pass
+        return sym, None
 
-    def _is_preheating_window(self, current_mins):
-        """
-        يعمل فقط في الدقيقة السابقة مباشرة للنافذة (تمهيد).
-        """
-        if self.daily_signal_count >= 10:
-            return False
-        for slot in self.all_slots:
-            if slot in self.completed_windows:
-                continue
-            if (slot - 1) == current_mins:
-                return True
-        return False
-
-    # ================================================================
-    #      الاستراتيجية (ستوكاستيك + تقاطع فقط)
-    # ================================================================
+    def _get_all_data_parallel(self):
+        data_dict = {}
+        with ThreadPoolExecutor(max_workers=12) as executor:
+            futures = {executor.submit(self._fetch_single, sym): sym for sym in self.SYMBOLS_MAP.keys()}
+            for future in as_completed(futures):
+                sym, df = future.result()
+                if df is not None:
+                    data_dict[sym] = df
+        return data_dict
 
     def _analyze_symbol(self, api_sym, df):
         if df is None or len(df) < 25: return None, 0, ""
@@ -207,7 +149,6 @@ class QuotexSniperBot:
 
             stoch_k_cur = cur['stoch_k']
 
-            # المرحلة 1
             if (stoch_k_cur > 70 and self.stage_memory.get(api_sym) != 'PUT_READY'):
                 self.stage_memory[api_sym] = 'PUT_READY'
                 self.stage_time[api_sym] = now
@@ -218,20 +159,19 @@ class QuotexSniperBot:
                 self.stage_time[api_sym] = now
                 self.stats['stage1_hits'] += 1
 
-            # المرحلة 2 - تقاطع الموفينجات فقط (بدون الشمعة الابتلاعية)
             current_stage = self.stage_memory.get(api_sym)
 
             if current_stage == 'PUT_READY':
                 cross_down = (prev['ema10'] >= prev['ema20']) and (cur['ema10'] < cur['ema20'])
                 if cross_down:
                     self.stage_memory[api_sym] = None
-                    return 'PUT', price, "تقاطع EMA 10/20 🔥"
+                    return 'PUT', price, "تقاطع EMA"
                     
             elif current_stage == 'CALL_READY':
                 cross_up = (prev['ema10'] <= prev['ema20']) and (cur['ema10'] > cur['ema20'])
                 if cross_up:
                     self.stage_memory[api_sym] = None
-                    return 'CALL', price, "تقاطع EMA 10/20 🔥"
+                    return 'CALL', price, "تقاطع EMA"
 
         except:
             pass
@@ -252,7 +192,6 @@ class QuotexSniperBot:
         msg += f"🪙 الزوج: *{qx_sym}*\n"
         msg += f"📊 الجلسة: *{session_name}*\n"
         msg += f"🎯 إشارة رقم: *{self.daily_signal_count}/10*\n"
-        msg += f"🔑 التأكيد: *{confirmation}*\n"
         msg += f"⏱️ الانتهاء: *{expiry_time.strftime('%H:%M:%S')}*\n"
         msg += f"💵 السعر: `{price:.5f}`\n"
         msg += f"━━━━━━━━━━━━━━━━"
@@ -260,12 +199,8 @@ class QuotexSniperBot:
         self.tg(msg)
         self.log(f">>>> SIGNAL: {qx_sym} {direction} | {session_name}")
 
-    # ================================================================
-    #               التشغيل الرئيسي (المحرك الذكي)
-    # ================================================================
-
     def run(self):
-        self.log("SNIPER V17.2 STARTED - No Engulfing Filter")
+        self.log("SNIPER V16 STARTED - Organized & Fixed")
         self.log("========================================")
 
         while True:
@@ -283,14 +218,13 @@ class QuotexSniperBot:
                     self.log("🔄 يوم جديد! تم إعادة تعيين العداد (0/10).")
                     self.tg("🌅 *صباح الخير*\n━━━━━━━━━━━━━━━━\n🔄 بدء يوم جديد\nالهدف: 10 إشارات دقيقة\n━━━━━━━━━━━━━━━━")
 
-                # 2. إذا أكملنا 10 إشارات (استراحة)
+                # 2. إذا أكملنا 10 إشارات، خذ استراحة حتى الصباح
                 if self.daily_signal_count >= 10:
                     if current_mins < self.morning_slots[0]:
                         pass 
                     else:
-                        if current_mins % 15 == 0 and current_sec < 2:
-                            self.log("🏆 تم إنجاز الهدف! البوت في استراحة حتى الغد...")
-                        time.sleep(10)
+                        self.log("🏆 تم إنجاز الهدف! البوت في استراحة حتى الغد...")
+                        time.sleep(300) 
                         continue
 
                 # 3. البحث عن النافذة الحالية
@@ -300,76 +234,69 @@ class QuotexSniperBot:
                         current_slot = slot
                         break
 
-                is_preheating = self._is_preheating_window(current_mins)
-
-                # 4. وقت الاستراحة (ليس في أي نافذة ولا في وقت التمهيد)
-                if current_slot is None and not is_preheating:
+                # 4. إذا لم نكن في أي نافذة (وقت استراحة)
+                if current_slot is None:
                     next_slot_mins = self._get_next_slot_time()
                     next_hour = next_slot_mins // 60
                     next_min = next_slot_mins % 60
                     session_name = self._get_session_name(next_slot_mins)
                     
+                    # تم إصلاح الخطأ هنا (استبدال current_min بـ current_mins)
                     if current_mins % 15 == 0 and current_sec < 2:
                         self.log(f"⏳ استراحة... الجلسة القادمة: {session_name} الساعة {next_hour:02d}:{next_min:02d}")
                     
-                    time.sleep(10)
+                    time.sleep(60)
                     continue
 
-                # 5. النافذة مكتملة (تم إطلاق إشارة بها)
+                # 5. إذا كنا في نافذة، ولكننا أطلقنا فيها إشارة مسبقاً
                 if current_slot in self.completed_windows:
-                    time.sleep(10)
+                    next_slot_mins = self._get_next_slot_time()
+                    next_hour = next_slot_mins // 60
+                    next_min = next_slot_mins % 60
+                    
+                    sleep_sec = (next_slot_mins - current_mins) * 60 - current_sec
+                    self.log(f"✅ تم إطلاق إشارة في هذه النافذة. النوم حتى {next_hour:02d}:{next_min:02d}...")
+                    time.sleep(max(sleep_sec, 10))
                     continue
 
-                # ==========================================
-                # 6. نظام السحب المتدرج (Staggered Fetch) - حل التجميد
-                # نبدأ من الثانية 45 سحب زوج واحد في كل دورة
-                # هذا يضمن أن البيانات جاهزة قبل الثانية 58 دون أي تعليق
-                # ==========================================
-                if 45 <= current_sec <= 56:
-                    for api_sym in self.pair_list:
-                        if self.fetched_this_minute.get(api_sym) != current_mins:
-                            df = self._fetch_twelve_data(api_sym)
-                            if df is not None:
-                                self.latest_data[api_sym] = df
-                            self.fetched_this_minute[api_sym] = current_mins
-                            time.sleep(0.2) # استراحة خفيفة لضمان عدم الضغط على المعالج
-                            break # نكسر الحلقة لنسحب زوج واحد فقط في هذه اللحظة
+                # 6. نحن الآن في نافذة صالحة
+                session_name = self._get_session_name(current_slot)
+                
+                # الفحص الديناميكي: نفحص في الثواني (55 إلى 05)
+                if not (current_sec >= 55 or current_sec <= 5):
+                    time.sleep(1)
+                    continue
 
-                # ==========================================
-                # 7. نحن في نافذة صالحة - الفحص في الثانية 58 فقط
-                # ==========================================
-                if current_slot is not None:
-                    session_name = self._get_session_name(current_slot)
+                if current_mins == self.last_checked_minute and current_sec >= 5:
+                    time.sleep(1)
+                    continue
+
+                self.last_checked_minute = current_mins
+                self.log(f"🔍 فحص نشط... ({session_name})")
+
+                data_dict = self._get_all_data_parallel()
+                
+                for api_sym, df in data_dict.items():
+                    if api_sym in self.last_signal_time:
+                        if time.time() - self.last_signal_time[api_sym] < self.COOLDOWN_SEC:
+                            continue
+
+                    direction, price, confirmation = self._analyze_symbol(api_sym, df)
                     
-                    if current_sec == 58:
-                        if current_mins != self.last_checked_minute:
-                            self.last_checked_minute = current_mins
-                            self.log(f"🔥 [الثانية 58] تحليل البيانات... ({session_name})")
-                            
-                            for api_sym in self.pair_list:
-                                if api_sym not in self.latest_data:
-                                    continue
-                                if api_sym in self.last_signal_time:
-                                    if time.time() - self.last_signal_time[api_sym] < self.COOLDOWN_SEC:
-                                        continue
+                    if direction and price > 0:
+                        qx_sym = self.SYMBOLS_MAP[api_sym]
+                        self._send_signal(api_sym, qx_sym, direction, price, confirmation, session_name)
+                        self.completed_windows.add(current_slot)
+                        break 
 
-                                df = self.latest_data[api_sym]
-                                direction, price, confirmation = self._analyze_symbol(api_sym, df)
-                                
-                                if direction and price > 0:
-                                    qx_sym = self.SYMBOLS_MAP[api_sym]
-                                    self._send_signal(api_sym, qx_sym, direction, price, confirmation, session_name)
-                                    self.completed_windows.add(current_slot)
-                                    break 
-
-                time.sleep(0.5) 
+                time.sleep(2)
 
             except Exception as e:
                 self.log(f"ERR: {e}")
-                time.sleep(5)
+                time.sleep(10)
 
 
 if __name__ == "__main__":
     bot = QuotexSniperBot()
-    if bot.tg_token and bot.twelve_api_key:
+    if bot.tg_token:
         bot.run()
