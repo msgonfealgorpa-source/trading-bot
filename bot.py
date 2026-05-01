@@ -6,10 +6,10 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 class QuotexSniperBot:
     """
-    بوت القناص V17.1 (النسخة المصححة - Staggered Fetch)
+    بوت القناص V17.2 (النسخة المصححة - بدون الابتلاعية)
     =============================================================
     - مصدر البيانات: Twelve Data API (فوركس حقيقي).
-    - فلتر إلزامي: شمعة الابتلاعية (Engulfing) - فلتر مرن.
+    - الاستراتيجية: استوكاستيك + تقاطع الموفينجات (EMA 10/20) فقط.
     - نظام توقيت دقيق: الإشارة في الثانية 58.
     - نظام السحب المتدرج: تحديث الأزواج بين الثانية 45 و 56 لمنع تجميد البوت.
     - محترم للحدود المجانية: ~150 طلب كحد أقصى في اليوم.
@@ -67,21 +67,21 @@ class QuotexSniperBot:
         self.api_cycle_index = 0
         self.last_api_call_time = 0
         
-        # متغير جديد لمنع تكرار السحب للزوج في نفس الدقيقة
+        # متغير لمنع تكرار السحب للزوج في نفس الدقيقة
         self.fetched_this_minute = {}
 
         # اختبار الاتصال عند الإطلاق
         if self._test_connection():
             self.log("Connected to TwelveData Successfully")
-            msg  = "🧠 *بوت القناص V17.1 (المصحح)*\n"
+            msg  = "🧠 *بوت القناص V17.2*\n"
             msg += "━━━━━━━━━━━━━━━━\n"
             msg += "✅ تم الاتصال بـ TwelveData\n"
             msg += "📈 7 أزواج فوركس حقيقية\n"
-            msg += "🔥 فلتر الشموع الابتلاعية: مفعّل\n"
+            msg += "⚡ فلتر الشموع الابتلاعية: مُلغى ❌\n"
             msg += "📅 الصباح: 08:00 - 10:00\n"
             msg += "📅 المساء: 17:00 - 19:00\n"
             msg += "━━━━━━━━━━━━━━━━\n"
-            msg += "🚀 جاهز للعمل بدون تجميد..."
+            msg += "🚀 الاستراتيجية: استوكاستيك + تقاطع EMA فقط..."
             self.tg(msg)
         else:
             self.log("Failed to connect to TwelveData!")
@@ -181,7 +181,7 @@ class QuotexSniperBot:
         return False
 
     # ================================================================
-    #      الاستراتيجية (ستوكاستيك + تقاطع + ابتلاعية مرنة)
+    #      الاستراتيجية (ستوكاستيك + تقاطع فقط)
     # ================================================================
 
     def _analyze_symbol(self, api_sym, df):
@@ -218,51 +218,20 @@ class QuotexSniperBot:
                 self.stage_time[api_sym] = now
                 self.stats['stage1_hits'] += 1
 
-            # حساب الشموع الابتلاعية (Engulfing) - فلتر مرن
-            is_bearish_engulfing = False
-            is_bullish_engulfing = False
-
-            prev_body_high = max(prev['Open'], prev['Close'])
-            prev_body_low = min(prev['Open'], prev['Close'])
-            prev_body_size = prev_body_high - prev_body_low
-
-            cur_body_high = max(cur['Open'], cur['Close'])
-            cur_body_low = min(cur['Open'], cur['Close'])
-            cur_body_size = cur_body_high - cur_body_low
-
-            # استبعاد الـ Doji (أجسام صفرية)
-            if prev_body_size > 0 and cur_body_size > 0:
-
-                # هبوطي: شمعة حمراء تبتلع خضراء سابقة
-                if cur['Close'] < cur['Open'] and prev['Close'] > prev['Open']:
-                    overlap_top = min(cur['Open'], prev_body_high)
-                    overlap_bottom = max(cur['Close'], prev_body_low)
-                    if overlap_top > overlap_bottom:
-                        overlap_ratio = (overlap_top - overlap_bottom) / prev_body_size
-                        is_bearish_engulfing = overlap_ratio >= 0.5
-
-                # صعودي: شمعة خضراء تبتلع حمراء سابقة
-                if cur['Close'] > cur['Open'] and prev['Close'] < prev['Open']:
-                    overlap_top = min(cur['Close'], prev_body_high)
-                    overlap_bottom = max(cur['Open'], prev_body_low)
-                    if overlap_top > overlap_bottom:
-                        overlap_ratio = (overlap_top - overlap_bottom) / prev_body_size
-                        is_bullish_engulfing = overlap_ratio >= 0.5
-
-            # المرحلة 2
+            # المرحلة 2 - تقاطع الموفينجات فقط (بدون الشمعة الابتلاعية)
             current_stage = self.stage_memory.get(api_sym)
 
             if current_stage == 'PUT_READY':
                 cross_down = (prev['ema10'] >= prev['ema20']) and (cur['ema10'] < cur['ema20'])
-                if cross_down and is_bearish_engulfing:
+                if cross_down:
                     self.stage_memory[api_sym] = None
-                    return 'PUT', price, "تقاطع + شمعة ابتلاعية 🔥"
+                    return 'PUT', price, "تقاطع EMA 10/20 🔥"
                     
             elif current_stage == 'CALL_READY':
                 cross_up = (prev['ema10'] <= prev['ema20']) and (cur['ema10'] > cur['ema20'])
-                if cross_up and is_bullish_engulfing:
+                if cross_up:
                     self.stage_memory[api_sym] = None
-                    return 'CALL', price, "تقاطع + شمعة ابتلاعية 🔥"
+                    return 'CALL', price, "تقاطع EMA 10/20 🔥"
 
         except:
             pass
@@ -296,7 +265,7 @@ class QuotexSniperBot:
     # ================================================================
 
     def run(self):
-        self.log("SNIPER V17.1 STARTED - Staggered Fetch Enabled")
+        self.log("SNIPER V17.2 STARTED - No Engulfing Filter")
         self.log("========================================")
 
         while True:
