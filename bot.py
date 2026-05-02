@@ -6,12 +6,10 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 class QuotexSniperBot:
     """
-    بوت القناص V18.0 (الرادار الذكي - Smart Radar)
+    بوت القناص V18.1 (الرادار الذكي - Smart Radar)
     ==================================================
-    - يسحب البيانات بناءً على "نشاط السوق" وليس الوقت.
-    - الأزواج النشطة: فحص كل 45 ثانية.
-    - الأزواج الهادئة: تجاهل تام لمدة 10 دقائق.
-    - يضمن عدم تفويت الفرص داخل الجلسات الطويلة بدون استنزاف الـ API.
+    - تم إصلاح مشكلة أزواج الين (JPY) في حساب النشاط.
+    - تم زيادة سحب الشموع إلى 100 شمعة لحساب دقيق لـ EMA.
     """
 
     def __init__(self):
@@ -32,8 +30,8 @@ class QuotexSniperBot:
         self.pair_list = list(self.SYMBOLS_MAP.keys())
 
         # الجلسات الصباحية (08:00 - 11:00) والمسائية (17:00 - 20:00) بتوقيت ليبيا
-        self.morning_session = (480, 660)  # 8*60 إلى 11*60
-        self.evening_session = (1020, 1200) # 17*60 إلى 20*60
+        self.morning_session = (480, 660)  
+        self.evening_session = (1020, 1200) 
 
         self.daily_signal_count = 0
         self.current_day = datetime.datetime.now(self.TZ).day
@@ -47,17 +45,17 @@ class QuotexSniperBot:
         self.stage_memory = {}
         self.stage_time = {}
         self.last_signal_time = {}
-        self.COOLDOWN_SEC = 180 # 3 دقائق冷却 بين الإشارات لنفس الزوج
+        self.COOLDOWN_SEC = 180 
 
         # === نظام الرادار الذكي (القلب الجديد للبوت) ===
         self.pair_status = {sym: {'next_check': 0, 'is_hot': False} for sym in self.pair_list}
-        self.HOT_SCAN_INTERVAL = 45   # فحص الزوج النشط كل 45 ثانية
-        self.COLD_SCAN_INTERVAL = 600 # تجاهل الزوج الهادئ لمدة 10 دقائق
-        self.VOLATILITY_THRESHOLD = 0.0004 # حد النشاط (4 نقاط تقريباً)
+        self.HOT_SCAN_INTERVAL = 45   
+        self.COLD_SCAN_INTERVAL = 600 
+        self.VOLATILITY_THRESHOLD = 0.0004 
 
         if self._test_connection():
-            self.log("Connected Successfully - Smart Radar V18.0 Active")
-            msg  = "🧠 *بوت القناص V18.0 (الرادار الذكي)*\n"
+            self.log("Connected Successfully - Smart Radar V18.1 Active")
+            msg  = "🧠 *بوت القناص V18.1 (الرادار الذكي)*\n"
             msg += "━━━━━━━━━━━━━━━━\n"
             msg += "⚡ الاستراتيجية: استوكاستيك + EMA 10/20\n"
             msg += "📡 النظام: سحب ذكي مرتبط بنشاط السوق\n"
@@ -98,7 +96,8 @@ class QuotexSniperBot:
             return None
 
         url = "https://api.twelvedata.com/time_series"
-        params = {'symbol': sym, 'interval': '1min', 'outputsize': 30, 'apikey': self.twelve_api_key}
+        # تعديل مهم: زيادة حجم الطلب إلى 100 لضمان دقة مؤشر EMA
+        params = {'symbol': sym, 'interval': '1min', 'outputsize': 100, 'apikey': self.twelve_api_key}
         try:
             r = requests.get(url, params=params, timeout=5)
             self.daily_api_calls += 1
@@ -119,14 +118,17 @@ class QuotexSniperBot:
             return "🌙 مسائية"
         return ""
 
-    def _check_volatility(self, df):
+    # تعديل الدالة لتستقبل اسم الزوج (sym) للتعامل مع الين الياباني
+    def _check_volatility(self, sym, df):
         """يقيس نشاط السوق لآخر 5 شموع لاتخاذ قرار السحب"""
         try:
             recent = df.tail(5)
             highs = recent['high'].astype(float)
             lows = recent['low'].astype(float)
             avg_range = (highs - lows).mean()
-            return avg_range > self.VOLATILITY_THRESHOLD
+            # استثناء لأزواج JPY لأن النقاط فيها تحسب بشكل مختلف
+            threshold = 0.04 if 'JPY' in sym else self.VOLATILITY_THRESHOLD
+            return avg_range > threshold
         except:
             return False
 
@@ -147,19 +149,16 @@ class QuotexSniperBot:
             now = time.time()
             stoch_k_cur = float(cur['stoch_k'])
 
-            # تحديث الذاكرة (المرحلة الأولى: الاستوكاستيك يدخل منطقة تشبع)
             if stoch_k_cur > 75: 
                 self.stage_memory[api_sym] = 'PUT_READY'; self.stage_time[api_sym] = now
             elif stoch_k_cur < 25: 
                 self.stage_memory[api_sym] = 'CALL_READY'; self.stage_time[api_sym] = now
             else:
-                # إعادة ضبط إذا خرج من منطقة التشبع قبل حدوث التقاطع
                 if self.stage_memory.get(api_sym) in ['PUT_READY', 'CALL_READY']:
                     self.stage_memory[api_sym] = None
 
             current_stage = self.stage_memory.get(api_sym)
             
-            # المرحلة الثانية: التقاطع يحدث والاستوكاستيك لا يزال في التشبع
             if current_stage == 'PUT_READY':
                 if (float(prev['ema10']) >= float(prev['ema20'])) and (float(cur['ema10']) < float(cur['ema20'])):
                     self.stage_memory[api_sym] = None
@@ -192,8 +191,8 @@ class QuotexSniperBot:
         self.log(f"Signal: {direction} {qx_sym} | API Used: {self.daily_api_calls}")
 
     def run(self):
-        self.log("SNIPER V18.0 RUNNING - Smart Radar Active")
-        scan_index = 0 # للمرور على الأزواج بالتناوب
+        self.log("SNIPER V18.1 RUNNING - Smart Radar Active")
+        scan_index = 0 
 
         while True:
             try:
@@ -201,53 +200,44 @@ class QuotexSniperBot:
                 current_mins = now.hour * 60 + now.minute
                 now_ts = time.time()
 
-                # 1. إعادة تصفير العدادات في منتصف الليل
                 if now.day != self.current_day:
                     self.current_day = now.day
                     self.daily_signal_count = 0
                     self.daily_api_calls = 0
                     self.limit_notified = False
                     self.stage_memory = {}
-                    # إعادة ضبط أوقات الفحص لتبدأ فوراً في الجلسة القادمة
                     for sym in self.pair_list:
                         self.pair_status[sym]['next_check'] = 0
                     self.log("🔄 يوم جديد! تم تصفير العدادات.")
 
-                # 2. التحقق من وجودنا داخل إحدى الجلسات
                 in_morning = self.morning_session[0] <= current_mins < self.morning_session[1]
                 in_evening = self.evening_session[0] <= current_mins < self.evening_session[1]
 
                 if not in_morning and not in_evening:
-                    # خارج الجلسات: سكون تام لتوفير الموارد
                     time.sleep(30)
                     continue
 
                 session_name = self._get_session_name(current_mins)
 
-                # 3. جلب الزوج التالي في الدور (نظام الطابور لتوزيع الطلبات وليس سحبها دفعة واحدة)
                 current_sym = self.pair_list[scan_index % len(self.pair_list)]
                 scan_index += 1
 
                 status = self.pair_status[current_sym]
 
-                # 4. التحقق: هل حان وقت فحص هذا الزوج؟
                 if now_ts < status['next_check']:
-                    time.sleep(1) # انتظر ثانية ثم تحقق من الزوج التالي
+                    time.sleep(1) 
                     continue
 
-                # 5. التحقق من الـ Cooldown بعد إعطاء إشارة
                 if now_ts - self.last_signal_time.get(current_sym, 0) < self.COOLDOWN_SEC:
                     status['next_check'] = now_ts + self.COOLDOWN_SEC
                     continue
 
-                # 6. سحب البيانات
                 df = self._fetch_twelve_data(current_sym)
                 if df is not None:
-                    # 7. قياس نشاط السوق لهذا الزوج
-                    is_active = self._check_volatility(df)
+                    # تم تمرير اسم الزوج هنا
+                    is_active = self._check_volatility(current_sym, df)
                     status['is_hot'] = is_active
 
-                    # 8. تحديد متى يتم فحص هذا الزوج مرة أخرى بناءً على نشاطه
                     if is_active:
                         status['next_check'] = now_ts + self.HOT_SCAN_INTERVAL
                         self.log(f"🔥 [{current_sym}] نشط! فحص مرة أخرى بعد 45 ثانية.")
@@ -255,11 +245,9 @@ class QuotexSniperBot:
                         status['next_check'] = now_ts + self.COLD_SCAN_INTERVAL
                         self.log(f"❄️ [{current_sym}] هادئ. تجاهل لمدة 10 دقائق.")
 
-                    # 9. تحليل البيانات hunted للإشارة
                     direction, price, confirmation = self._analyze_symbol(current_sym, df)
                     if direction:
                         self._send_signal(current_sym, self.SYMBOLS_MAP[current_sym], direction, price, confirmation, session_name)
-                        # بعد الإشارة، نعطي هذا الزوج راحة لكي لا يتكرر نفس النمط المزيف
                         status['next_check'] = now_ts + 300 
                 
                 time.sleep(0.5)
