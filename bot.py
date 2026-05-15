@@ -2,15 +2,6 @@
 ═══════════════════════════════════════════════════════════════
   🔥 القناص الأسطوري V3.0 — النسخة الكاملة (حساب تجريبي) 🔥
 ═══════════════════════════════════════════════════════════════
-  ✅ Asyncio لفحص 50 عملة في نفس اللحظة
-  ✅ تحليل متعدد الأطر الزمنية (4H للاتجاه + 15m للدخول)
-  ✅ دمج مفهوم الأوردر بلوك (Order Blocks - SMC)
-  ✅ 7 مؤشرات فنية + تحليل كامل للسوق
-  ✅ مصادر خارجية (إعلانات بينانس، كوينجيكو، الخوف والطمع، ارتفاعات الحجم)
-  ✅ نظام تسجيل أخطاء احترافي (Logging)
-  ✅ وقف خسارة وهدف ربح مرن (Trailing Stop)
-  ✅ سحب الأسعار اللحظي (Anti-Ban Polling) لتجاوز حظر Railway
-═══════════════════════════════════════════════════════════════
 """
 
 import asyncio, aiohttp, json, math, os, sys, time, logging, requests
@@ -59,6 +50,7 @@ class LegendarySniperBotV3:
         
         self.TRADE_ENABLED = os.environ.get('TRADE_ENABLED', 'false').lower() == 'true'
         self.BACKTEST_MODE = os.environ.get('BACKTEST_MODE', 'false').lower() == 'true'
+        self.ENABLE_NEWS = os.environ.get('ENABLE_NEWS', 'true').lower() == 'true' # <--- زر تحكم بالأخبار
         self.RISK_PER_TRADE_PCT = float(os.environ.get('RISK_PCT', '2'))
         self.MIN_SCORE_TO_TRADE = int(os.environ.get('MIN_SCORE', '6'))
         self.MAX_OPEN_TRADES = int(os.environ.get('MAX_TRADES', '3'))
@@ -73,26 +65,23 @@ class LegendarySniperBotV3:
         self.live_prices = {}
         self.session = None
         
-        # ═══ روابط الحساب التجريبي (Testnet) ═══
+        # روابط الحساب التجريبي (Testnet)
         self.data_url = "https://testnet.binance.vision"
         self.trade_url = "https://testnet.binance.vision"
 
-        # مؤقتات الأحداث
-        self.last_announcement_check = 0
-        self.last_coingecko_check = 0
-        self.last_fear_greed_check = 0
-        self.last_volume_scan = 0
-        self.last_full_scan = 0
+        # مؤقتات - تم تعديلها لمنع الإزعاج فور التشغيل
+        self.last_announcement_check = time.time()
+        self.last_coingecko_check = time.time()
+        self.last_fear_greed_check = time.time()
+        self.last_volume_scan = time.time()
+        self.last_full_scan = 0 # هذا فقط الذي يبدأ فوراً لتحميل العملات
 
-        # عملات المسح السريع
         self.priority = ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT', 'LINK', 'UNI', 'ATOM', 'LTC', 'NEAR', 'APT', 'ARB', 'OP', 'SUI', 'SEI', 'TIA', 'INJ', 'FET', 'WLD', 'PEPE', 'SHIB', 'TON']
 
         mode = "🧪 تداول تجريبي" if self.TRADE_ENABLED else "👁️ مراقبة فقط"
-        logger.info(f"🔥 القناص الأسطوري V3.0 (Testnet) بدأ التشغيل — الوضع: {mode}")
+        news_status = "مفعلة" if self.ENABLE_NEWS else "معطلة"
+        logger.info(f"🔥 القناص الأسطوري V3.0 (Testnet) بدأ التشغيل — الوضع: {mode} | الأخبار: {news_status}")
 
-    # ═══════════════════════════════════════════════════
-    #          وحدة تيليجرام (Async)
-    # ═══════════════════════════════════════════════════
     async def tg(self, msg):
         try:
             if not self.session: return
@@ -105,9 +94,6 @@ class LegendarySniperBotV3:
                 await self.session.post(f"https://api.telegram.org/bot{self.tg_token}/sendMessage", data={'chat_id': self.tg_chat, 'text': msg, 'parse_mode': 'Markdown'})
         except Exception as e: logger.error(f"فشل إرسال تيليجرام: {e}")
 
-    # ═══════════════════════════════════════════════════
-    #     وحدة بينانس API الأساسية (Async)
-    # ═══════════════════════════════════════════════════
     def _sign(self, params):
         params['timestamp'] = int(time.time() * 1000)
         query = urlencode(params)
@@ -130,11 +116,17 @@ class LegendarySniperBotV3:
                 else: return None
         except Exception as e: logger.error(f"استثناء بينانس: {e}"); return None
 
-    # ═══════════════════════════════════════════════════
-    #       تحميل الأزواج وحجوم الخطوات
-    # ═══════════════════════════════════════════════════
     async def load_market_data(self):
         data = await self._binance_request('GET', '/api/v3/exchangeInfo')
+        
+        # حماية: إذا فشل التستنت في إعطاء قائمة العملات، اسحبها من الرابط الحقيقي المؤمن
+        if not data:
+            logger.warning("فشل تحميل البيانات من Testnet، جاري السحب من Data API...")
+            try:
+                async with self.session.get("https://data-api.binance.vision/api/v3/exchangeInfo") as r:
+                    if r.status == 200: data = await r.json()
+            except Exception: pass
+
         if not data: return
         new_pairs, new_symbols_set = [], set()
         for s in data.get('symbols', []):
@@ -152,9 +144,6 @@ class LegendarySniperBotV3:
         self.usdt_pairs = new_pairs; self.known_symbols = new_symbols_set
         logger.info(f"تم تحميل {len(self.usdt_pairs)} زوج.")
 
-    # ═══════════════════════════════════════════════════
-    #       جلب الشموع (Async) لأطر زمنية متعددة
-    # ═══════════════════════════════════════════════════
     async def get_klines(self, symbol, interval='15m', limit=100):
         data = await self._binance_request('GET', '/api/v3/klines', {'symbol': symbol, 'interval': interval, 'limit': limit})
         if data and len(data) > 20:
@@ -164,9 +153,6 @@ class LegendarySniperBotV3:
             return df
         return None
 
-    # ═══════════════════════════════════════════════════
-    #     خوارزمية الأوردر بلوك (SMC)
-    # ═══════════════════════════════════════════════════
     def detect_order_blocks(self, df, is_bullish_trend):
         if df is None or len(df) < 10: return None
         if is_bullish_trend:
@@ -179,9 +165,6 @@ class LegendarySniperBotV3:
                 if prev_candle['close'] > prev_candle['open'] and curr_candle['close'] < prev_candle['low']: return {'type': 'bearish', 'high': prev_candle['high'], 'low': prev_candle['low']}
         return None
 
-    # ═══════════════════════════════════════════════════
-    #     التحليل المتعدد المؤشرات (7 مؤشرات + MTF + SMC)
-    # ═══════════════════════════════════════════════════
     async def analyze_coin(self, symbol):
         try:
             df_4h = await self.get_klines(symbol, '4h', 50)
@@ -196,68 +179,55 @@ class LegendarySniperBotV3:
             price = df_15m.iloc[-1]['close']
             result = {'symbol': symbol, 'price': price, 'score': 0, 'signals': [], 'direction': None, 'rsi': None, 'volume_ratio': None}
 
-            # 1. RSI
             rsi_val = ta.momentum.RSIIndicator(df_15m['close'], window=14).rsi().iloc[-1]
             result['rsi'] = round(rsi_val, 1)
             if is_bullish_trend and rsi_val < 25: result['score'] += 4; result['signals'].append(f"📈 RSI تشبع بيعي شديد ({rsi_val:.0f})")
             elif is_bullish_trend and rsi_val < 35: result['score'] += 2; result['signals'].append(f"📈 RSI تشبع بيعي ({rsi_val:.0f})")
             elif not is_bullish_trend and rsi_val > 75: result['score'] -= 4; result['signals'].append(f"📉 RSI تشبع شرائي شديد ({rsi_val:.0f})")
 
-            # 2. MACD
             macd_ind = ta.trend.MACD(df_15m['close'])
             if macd_ind.macd().iloc[-1] > macd_ind.macd_signal().iloc[-1] and macd_ind.macd().iloc[-2] <= macd_ind.macd_signal().iloc[-2]:
                 result['score'] += 3; result['signals'].append("📈 MACD تقاطع صعودي ⚡")
             elif macd_ind.macd().iloc[-1] < macd_ind.macd_signal().iloc[-1] and macd_ind.macd().iloc[-2] >= macd_ind.macd_signal().iloc[-2]:
                 result['score'] -= 3; result['signals'].append("📉 MACD تقاطع هبوطي")
 
-            # 3. EMA
             ema9, ema21 = ta.trend.EMAIndicator(df_15m['close'], window=9).ema_indicator(), ta.trend.EMAIndicator(df_15m['close'], window=21).ema_indicator()
             if ema9.iloc[-1] > ema21.iloc[-1] and ema9.iloc[-2] <= ema21.iloc[-2]:
                 result['score'] += 2; result['signals'].append("📈 EMA9 تقاطع فوق EMA21")
             elif ema9.iloc[-1] < ema21.iloc[-1] and ema9.iloc[-2] >= ema21.iloc[-2]:
                 result['score'] -= 2; result['signals'].append("📉 EMA9 تقاطع تحت EMA21")
 
-            # 4. Bollinger Bands
             bb = ta.volatility.BollingerBands(df_15m['close'])
             bb_lower = bb.bollinger_lband().iloc[-1]
             if not pd.isna(bb_lower) and price <= bb_lower: result['score'] += 3; result['signals'].append("📈 لامس البولنجر السفلي (ارتداد)")
 
-            # 5. Volume
             vol_avg, vol_current = df_15m['volume'].rolling(20).mean().iloc[-1], df_15m.iloc[-1]['volume']
             vol_ratio = vol_current / vol_avg if vol_avg > 0 else 1
             result['volume_ratio'] = round(vol_ratio, 1)
             if vol_ratio > 3: result['score'] += 3; result['signals'].append(f"🔥 حجم ضخم! ({vol_ratio:.1f}x)")
             elif vol_ratio > 2: result['score'] += 2; result['signals'].append(f"📊 حجم عالي ({vol_ratio:.1f}x)")
 
-            # 6. Stochastic
             stoch = ta.momentum.StochasticOscillator(high=df_15m['high'], low=df_15m['low'], close=df_15m['close'])
             k, d = stoch.stoch().iloc[-1], stoch.stoch_signal().iloc[-1]
             k_prev, d_prev = stoch.stoch().iloc[-2], stoch.stoch_signal().iloc[-2]
             if k < 20 and d < 20 and k_prev < d_prev and k > d: result['score'] += 3; result['signals'].append("📈 Stochastic تقاطع صعودي بالقاع")
 
-            # 7. Price Change
             if len(df_15m) >= 25:
                 change_24h = ((df_15m.iloc[-1]['close'] - df_15m.iloc[-25]['close']) / df_15m.iloc[-25]['close']) * 100
                 if is_bullish_trend and -15 < change_24h < -5: result['score'] += 2; result['signals'].append(f"📉 هبوط {change_24h:.1f}% (فرصة!)")
                 elif not is_bullish_trend and change_24h > 20: result['score'] -= 2; result['signals'].append(f"⚠️ صعود حاد {change_24h:.1f}%")
 
-            # 8. Order Block (SMC)
             ob = self.detect_order_blocks(df_15m, is_bullish_trend)
             if ob and is_bullish_trend and ob['type'] == 'bullish' and ob['low'] <= price <= ob['high'] * 1.01:
                 result['score'] += 4; result['signals'].append("🧠 ارتداد من Order Block (فرصة ذهبية!)")
             elif ob and not is_bullish_trend and ob['type'] == 'bearish' and ob['high'] >= price >= ob['low'] * 0.99:
                 result['score'] -= 4; result['signals'].append("🧠 ارتداد من Order Block هبوطي")
 
-            # تحديد الاتجاه
             if is_bullish_trend and result['score'] >= self.MIN_SCORE_TO_TRADE: result['direction'] = 'BUY'
             elif not is_bullish_trend and result['score'] <= -self.MIN_SCORE_TO_TRADE: result['direction'] = 'SELL'
-
             return result
         except Exception as e: logger.error(f"خطأ تحليل {symbol}: {e}"); return None
 
-    # ═══════════════════════════════════════════════════
-    #     حساب SL/TP المرن بناءً على ATR
-    # ═══════════════════════════════════════════════════
     async def calculate_dynamic_sl_tp(self, symbol, entry_price):
         df = await self.get_klines(symbol, '15m', 30)
         if df is None or len(df) < 15: return entry_price * 0.97, entry_price * 1.06, entry_price * 1.03, 3.0
@@ -272,9 +242,6 @@ class LegendarySniperBotV3:
         tp1_price = entry_price * (1 + tp1_distance / 100)
         return round(sl_price, 6), round(tp1_price, 6), round(trailing_activation, 6), round(trailing_distance_pct, 2)
 
-    # ═══════════════════════════════════════════════════
-    #       التداول التلقائي (شراء وبيع Spot)
-    # ═══════════════════════════════════════════════════
     async def execute_trade(self, analysis):
         symbol, direction, score, price = analysis['symbol'], analysis['direction'], analysis['score'], analysis['price']
         if not self.TRADE_ENABLED or direction != 'BUY': return
@@ -301,9 +268,6 @@ class LegendarySniperBotV3:
             msg = f"✅ *صفقة شراء منفذة (وقف مرن)!*\n━━━━━━━━━━━━━━━━━━━━━━━━\n🪙 `{symbol}`\n💵 الدخول: `{fill_price:.6f}`\n💰 المبلغ: `${trade_amount:.2f}`\n🛑 وقف الخسارة: `{sl_price:.6f}`\n🎯 هدف الربح: `{tp_price:.6f}`\n📈 نقاط: *{score}*"
             await self.tg(msg)
 
-    # ═══════════════════════════════════════════════════
-    #    مراقبة الصفقات بالوقف المتحرك (Trailing)
-    # ═══════════════════════════════════════════════════
     async def monitor_trades(self):
         if not self.active_trades: return
         for symbol in list(self.active_trades.keys()):
@@ -346,7 +310,7 @@ class LegendarySniperBotV3:
                 del self.active_trades[symbol]; self._save_active_trades()
 
     # ═══════════════════════════════════════════════════
-    #           وحدات البحث الخارجية المجانية
+    #           وحدات البحث الخارجية (يمكن إيقافها)
     # ═══════════════════════════════════════════════════
     async def check_binance_announcements(self):
         try:
@@ -397,9 +361,6 @@ class LegendarySniperBotV3:
             for i, s in enumerate(spikes[:5]): msg += f"{i+1}. `{s['symbol']}` | 💧 ${s['vol']/1e6:.1f}M | 📈 {s['chg']:+.1f}%\n"
             await self.tg(msg)
 
-    # ═══════════════════════════════════════════════════
-    #       المسح السريع والشامل للسوق
-    # ═══════════════════════════════════════════════════
     async def quick_scan(self):
         found = []
         for coin in self.priority:
@@ -415,9 +376,6 @@ class LegendarySniperBotV3:
             await self.tg(msg)
             await self.execute_trade(found[0])
 
-    # ═══════════════════════════════════════════════════
-    #       حفظ واسترجاع الصفقات (JSON)
-    # ═══════════════════════════════════════════════════
     def _save_active_trades(self):
         try:
             with open('active_trades.json', 'w') as f: json.dump(self.active_trades, f)
@@ -430,9 +388,6 @@ class LegendarySniperBotV3:
                 if self.active_trades: logger.info(f"📂 تم استرجاع {len(self.active_trades)} صفقة مفتوحة")
         except Exception: self.active_trades = {}
 
-    # ═══════════════════════════════════════════════════
-    # بديل WebSockets: سحب الأسعار اللحظية لتجاوز الحظر
-    # ═══════════════════════════════════════════════════
     async def price_poller(self):
         logger.info("🔄 بدء سحب الأسعار اللحظية عبر REST API...")
         while True:
@@ -443,9 +398,6 @@ class LegendarySniperBotV3:
             except Exception as e: logger.error(f"خطأ في سحب الأسعار: {e}")
             await asyncio.sleep(3)
 
-    # ═══════════════════════════════════════════════════
-    #          القلب النابض (Main Async Loop)
-    # ═══════════════════════════════════════════════════
     async def main_loop(self):
         self.session = aiohttp.ClientSession()
         await self.load_market_data()
@@ -459,14 +411,19 @@ class LegendarySniperBotV3:
                 now = time.time()
                 await self.monitor_trades()
 
-                if now - self.last_announcement_check > 300:
-                    await self.check_binance_announcements(); self.last_announcement_check = now
-
+                # المسح السريع يعمل دائماً
                 if now - self.last_volume_scan > 900:
-                    await self.quick_scan(); await self.detect_volume_spikes(); self.last_volume_scan = now
+                    await self.quick_scan()
+                    if self.ENABLE_NEWS: await self.detect_volume_spikes()
+                    self.last_volume_scan = now
 
-                if now - self.last_coingecko_check > 1800:
-                    await self.scan_coingecko_trending(); await self.check_fear_greed(); self.last_coingecko_check = now
+                # الأخبار والتحليلات الأساسية (تعمل فقط إذا كانت مفعلة)
+                if self.ENABLE_NEWS:
+                    if now - self.last_announcement_check > 300:
+                        await self.check_binance_announcements(); self.last_announcement_check = now
+
+                    if now - self.last_coingecko_check > 1800:
+                        await self.scan_coingecko_trending(); await self.check_fear_greed(); self.last_coingecko_check = now
 
                 if now - self.last_full_scan > 10800:
                     await self.load_market_data(); self.last_full_scan = now
