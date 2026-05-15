@@ -3,6 +3,7 @@
 import asyncio, aiohttp, json, math, os, sys, time, logging, requests
 import pandas as pd
 import numpy as np
+import ta
 import hmac
 import hashlib
 from urllib.parse import urlencode
