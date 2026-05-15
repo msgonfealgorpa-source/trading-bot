@@ -2,3 +2,4 @@ pandas
 ta
 aiohttp
 websockets
+requests
