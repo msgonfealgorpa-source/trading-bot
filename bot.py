@@ -165,7 +165,7 @@ class LegendarySniperBotV3:
         while True:
             try:
                 # إضافة User-Agent لتجاوز حظر Railway
-                async with websockets.connect(self.ws_url, extra_headers={"User-Agent": "Mozilla/5.0"}) as ws:
+               async with websockets.connect(self.ws_url) as ws:
                     subscribe_msg = {"method": "SUBSCRIBE", "params": ["!miniTicker@arr"], "id": 1}
                     await ws.send(json.dumps(subscribe_msg))
                     logger.info("✅ WebSockets Connected (Testnet)")
