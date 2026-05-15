@@ -1,6 +1,6 @@
 """
 ═══════════════════════════════════════════════════════════════
-  🔥 القناص الأسطوري V3.0 — نسخة الحساب التجريبي (Testnet) 🔥
+  🔥 القناص الأسطوري V3.0 — نسخة مضادة للحظر (بدون WebSockets) 🔥
 ═══════════════════════════════════════════════════════════════
 """
 
@@ -11,7 +11,6 @@ import hmac
 import hashlib
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
-import websockets
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -61,15 +60,20 @@ class LegendarySniperBotV3:
         self.active_trades = {}
         self.stats = {'total_scans': 0, 'signals_found': 0, 'trades_executed': 0, 'wins': 0, 'losses': 0}
         self.step_sizes_cache = {}
-        
-        # روابط الحساب التجريبي
-        self.base_url = "https://testnet.binance.vision"
-        self.ws_url = "wss://testnet.binance.vision/ws"
         self.live_prices = {}
         self.session = None
 
+        # ═══ إعدادات الروابط ═══
+        # للحساب التجريبي (Testnet):
+        self.data_url = "https://testnet.binance.vision"
+        self.trade_url = "https://testnet.binance.vision"
+        
+        # للحساب الحقيقي (قم بحذف علامتي # بالأسفل وضعهما أمام الروابط التجريبية بالأعلى):
+        # self.data_url = "https://data-api.binance.vision"
+        # self.trade_url = "https://api.binance.com"
+
         mode = "Backtest" if self.BACKTEST_MODE else ("Auto Trade" if self.TRADE_ENABLED else "Monitor Only")
-        logger.info(f"🔥 القناص الأسطوري V3.0 (Testnet) بدأ التشغيل — الوضع: {mode}")
+        logger.info(f"🔥 القناص الأسطوري V3.0 (Anti-Ban) بدأ التشغيل — الوضع: {mode}")
 
     async def tg(self, msg):
         try:
@@ -90,9 +94,10 @@ class LegendarySniperBotV3:
         params['signature'] = signature
         return params
 
-    async def _binance_request(self, method, endpoint, params=None, signed=False):
+    async def _binance_request(self, method, endpoint, params=None, signed=False, is_trade_endpoint=False):
         try:
-            url = f"{self.base_url}{endpoint}"
+            base = self.trade_url if is_trade_endpoint else self.data_url
+            url = f"{base}{endpoint}"
             headers = {}
             if signed:
                 if not self.binance_api_key: return None
@@ -161,28 +166,23 @@ class LegendarySniperBotV3:
             return result
         except Exception as e: logger.error(f"خطأ تحليل {symbol}: {e}"); return None
 
-    async def websocket_listener(self):
+    # ═══ بديل WebSockets: سحب الأسعار كل 3 ثوانٍ (مضمون 100% بدون حظر) ═══
+    async def price_poller(self):
+        logger.info("🔄 بدء سحب الأسعار اللحظية عبر REST API...")
         while True:
             try:
-                # إضافة User-Agent لتجاوز حظر Railway
-               async with websockets.connect(self.ws_url) as ws:
-                    subscribe_msg = {"method": "SUBSCRIBE", "params": ["!miniTicker@arr"], "id": 1}
-                    await ws.send(json.dumps(subscribe_msg))
-                    logger.info("✅ WebSockets Connected (Testnet)")
-                    while True:
-                        msg = await ws.recv()
-                        data = json.loads(msg)
-                        if isinstance(data, list):
-                            for t in data: self.live_prices[t['s']] = float(t['c'])
+                data = await self._binance_request('GET', '/api/v3/ticker/price')
+                if data:
+                    for item in data:
+                        self.live_prices[item['symbol']] = float(item['price'])
             except Exception as e:
-                logger.error(f"WS Error: {e}")
-                await asyncio.sleep(5)
+                logger.error(f"خطأ في سحب الأسعار: {e}")
+            await asyncio.sleep(3) # تحديث كل 3 ثواني (سريع جداً لإطار 15 دقيقة)
 
     async def monitor_trades(self):
         if not self.active_trades: return
         for symbol in list(self.active_trades.keys()):
-            trade = self.active_trades[symbol]
-            current_price = self.live_prices.get(symbol)
+            trade = self.active_trades[symbol]; current_price = self.live_prices.get(symbol)
             if not current_price: continue
             entry_price = trade['entry_price']
             if current_price > trade['highest_price']: trade['highest_price'] = current_price
@@ -198,7 +198,7 @@ class LegendarySniperBotV3:
             if closed:
                 if self.TRADE_ENABLED:
                     qty = self.adjust_quantity(trade['quantity'], self.step_sizes_cache.get(symbol, 1))
-                    await self._binance_request('POST', '/api/v3/order', {'symbol': symbol, 'side': 'SELL', 'type': 'MARKET', 'quantity': qty}, signed=True)
+                    await self._binance_request('POST', '/api/v3/order', {'symbol': symbol, 'side': 'SELL', 'type': 'MARKET', 'quantity': qty}, signed=True, is_trade_endpoint=True)
                 pnl_pct = ((current_price - entry_price) / entry_price) * 100
                 await self.tg(f"🏁 Closed `{symbol}`\nReason: {close_reason}\nResult: `{pnl_pct:+.2f}%`")
                 del self.active_trades[symbol]; self._save_active_trades()
@@ -221,7 +221,7 @@ class LegendarySniperBotV3:
 
     async def execute_trade(self, analysis):
         symbol, price = analysis['symbol'], analysis['price']
-        balance_data = await self._binance_request('GET', '/api/v3/account', signed=True)
+        balance_data = await self._binance_request('GET', '/api/v3/account', signed=True, is_trade_endpoint=True)
         usdt_balance = 0
         if balance_data:
             for b in balance_data.get('balances', []):
@@ -232,7 +232,7 @@ class LegendarySniperBotV3:
         if df is None: return
         atr = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range().iloc[-1]
         atr_pct = (atr / price) * 100
-        result = await self._binance_request('POST', '/api/v3/order', {'symbol': symbol, 'side': 'BUY', 'type': 'MARKET', 'quoteOrderQty': round(trade_amount, 2)}, signed=True)
+        result = await self._binance_request('POST', '/api/v3/order', {'symbol': symbol, 'side': 'BUY', 'type': 'MARKET', 'quoteOrderQty': round(trade_amount, 2)}, signed=True, is_trade_endpoint=True)
         if result and result.get('status') == 'FILLED':
             fill_price, fill_qty = float(result['fills'][0]['price']), float(result['fills'][0]['qty'])
             self.active_trades[symbol] = {'entry_price': fill_price, 'quantity': fill_qty, 'stop_loss': price * (1 - (atr_pct * 1.5) / 100), 'take_profit': price * (1 + (atr_pct * 3.0) / 100), 'trailing_distance_pct': atr_pct * 1.5, 'highest_price': fill_price, 'trailing_active': False, 'entry_time': time.time()}
@@ -252,8 +252,11 @@ class LegendarySniperBotV3:
     async def main_loop(self):
         self.session = aiohttp.ClientSession()
         await self.load_market_data(); self._load_active_trades()
-        await self.tg("🔥 *Sniper Bot V3.0 (Testnet) is LIVE!*")
-        asyncio.create_task(self.websocket_listener())
+        await self.tg("🔥 *Sniper Bot V3.0 (Anti-Ban) is LIVE!*")
+        
+        # تشغيل ساحب الأسعار في الخلفية بدلاً من WebSockets
+        asyncio.create_task(self.price_poller())
+        
         scan_counter = 0
         try:
             while True:
