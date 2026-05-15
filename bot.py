@@ -293,15 +293,10 @@ class LegendarySniperBotV5:
         else:
             ws_url = f"wss://stream.binance.com:9443/stream?streams={'/'.join(streams)}"
         
-        # إضافة User-Agent لتجاوز حماية Cloudflare في Testnet
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Origin": "https://www.binance.com"
-        }
-        
         while True:
             try:
-                async with websockets.connect(ws_url, ping_interval=20, extra_headers=headers) as ws:
+                # اتصال عادي ونظيف بدون أي headers إضافية
+                async with websockets.connect(ws_url, ping_interval=20) as ws:
                     logger.info("✅ WS متصل (أسعار + شموع لحظية)!")
                     async for message in ws:
                         data = json.loads(message).get('data', {})
