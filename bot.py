@@ -279,7 +279,8 @@ class LegendarySniperBotV5:
             # نتحقق إذا كنا نملك العملة فعلاً
             logger.warning(f"⚠️ {sym} في قاعدة البيانات لكن غير موجود كأمر مفتوح. سيتم حذفه لاحقاً إن لزم.")
 
-        # ═════════════════════ WebSocket اللحظي المتقدم (مع بديل للـ Testnet) ═════════════════════
+        # ═════════════════════ إدارة الاتصال اللحظي (WebSocket + REST Fallback) ═════════════════════
+    
     async def ws_manager(self):
         streams = []
         for coin in self.priority:
@@ -295,7 +296,6 @@ class LegendarySniperBotV5:
         
         while True:
             try:
-                # اتصال عادي ونظيف بدون أي headers إضافية
                 async with websockets.connect(ws_url, ping_interval=20) as ws:
                     logger.info("✅ WS متصل (أسعار + شموع لحظية)!")
                     async for message in ws:
@@ -321,7 +321,7 @@ class LegendarySniperBotV5:
             except Exception as e:
                 logger.error(f"❌ خطأ في WebSocket: {e}")
                 
-                # إذا كان الـ Testnet يرفض الاتصال، ننتقل للسحب العادي (REST)
+                # إذا كان الـ Testnet يرفض الاتصال (404)، ننتقل للسحب العادي (REST)
                 if "404" in str(e) or "403" in str(e) or "rejected" in str(e):
                     logger.warning("⚠️ WebSocket محظور/غير متاح. يتم التحول لـ REST Polling (البديل الآمن)...")
                     await self.rest_poller() # تشغيل البديل
@@ -332,6 +332,7 @@ class LegendarySniperBotV5:
     async def rest_poller(self):
         """بديل احترافي لـ WebSocket في حال فشل الاتصال (مثالي لـ Testnet)"""
         logger.info("🔄 بدء سحب الأسعار والشموع عبر REST API كل 30 ثانية...")
+        
         # سحب بيانات أولية للشموع قبل البدء
         for coin in self.priority:
             symbol = f"{coin}USDT"
@@ -360,6 +361,23 @@ class LegendarySniperBotV5:
             except Exception as e:
                 logger.error(f"خطأ في REST Poller: {e}")
                 await asyncio.sleep(60)
+
+    async def get_klines(self, symbol, interval='15m', limit=100):
+        """جلب الشموع التاريخية من بينانس (تعمل مع الحساب الحقيقي والتجريبي)"""
+        endpoint = '/api/v3/klines'
+        data = await self._binance_request('GET', endpoint, {'symbol': symbol, 'interval': interval, 'limit': limit})
+        if data and len(data) > 20:
+            df = pd.DataFrame(data, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_volume', 'trades', 'taker_buy_vol', 'taker_buy_quote_vol', 'ignore'])
+            for col in ['open', 'high', 'low', 'close', 'volume', 'taker_buy_vol']: 
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            df['time'] = pd.to_datetime(df['time'], unit='ms')
+            return df
+        return None
+
+    def get_live_df(self, symbol):
+        """تحويل بيانات الـ WebSocket أو الـ REST إلى DataFrame"""
+        if symbol not in self.live_klines or len(self.live_klines[symbol]) < 50: return None
+        return pd.DataFrame(self.live_klines[symbol])
 
     # ═════════════════════ التحليل والتنفيذ ═════════════════════
     async def analyze_coin(self, symbol):
