@@ -1,11 +1,12 @@
 """
 ═══════════════════════════════════════════════════════════════
-  🔥 القناص الأسطوري V2.0 — النسخة الكاملة المرنة 🔥
+  🔥 القناص الأسطوري V2.1 — النسخة الكاملة المرنة والمصلحة 🔥
 ═══════════════════════════════════════════════════════════════
   ✅ تحليل 7 مؤشرات فنية
   ✅ وقف خسارة وهدف ربح مرن (Trailing Stop) يتبع السعر ليحقق أرباح 100%+
   ✅ بحث في 5 مصادر مجانية (بينانس، كوينجيكو، دكس سكرينر، الخوف والطمع)
   ✅ تداول فوري (Spot) آمن بدون تصفية
+  ✅ إصلاح مشكلة حظر بينانس للـ IP على الخوادم السحابية
   ✅ يعمل على Railway / Replit / Termux
 ═══════════════════════════════════════════════════════════════
 """
@@ -27,7 +28,9 @@ class LegendarySniperBot:
         # ═══ إعدادات بينانس API ═══
         self.binance_api_key = os.environ.get('BINANCE_API_KEY', '')
         self.binance_api_secret = os.environ.get('BINANCE_API_SECRET', '')
-        self.binance_base = 'https://api.binance.com'
+        # رابطين: واحد لقراءة البيانات (لا يحظره الكلاود) وواحد للتداول
+        self.binance_trade_url = 'https://api.binance.com'
+        self.binance_data_url = 'https://data-api.binance.vision'
 
         # ═══ إعدادات التداول والمخاطر ═══
         self.TRADE_ENABLED = os.environ.get('TRADE_ENABLED', 'false').lower() == 'true'
@@ -42,7 +45,7 @@ class LegendarySniperBot:
         self.known_symbols = set()
         self.active_trades = {}
         self.stats = {'total_scans': 0, 'signals_found': 0, 'trades_executed': 0, 'wins': 0, 'losses': 0}
-        self.step_sizes_cache = {} # حفظ حجم الخطوة لتسريع التداول
+        self.step_sizes_cache = {}
 
         # مؤقتات
         self.last_announcement_check = 0
@@ -54,7 +57,7 @@ class LegendarySniperBot:
 
         # ═══ رسالة التشغيل ═══
         mode = "⚔️ تداول تلقائي (Spot)" if self.TRADE_ENABLED else "👁️ مراقبة فقط (آمن)"
-        msg = "🔥 *القناص الأسطوري V2.0 — النسخة المرنة!*\n"
+        msg = "🔥 *القناص الأسطوري V2.1 — النسخة المصلحة!*\n"
         msg += "━━━━━━━━━━━━━━━━━━━━━━━━\n"
         msg += f"📡 الوضع: {mode}\n"
         msg += f"💰 مخاطرة/صفقة: {self.RISK_PER_TRADE_PCT}%\n"
@@ -92,10 +95,13 @@ class LegendarySniperBot:
         params['signature'] = signature
         return params
 
-    def _binance_request(self, method, endpoint, params=None, signed=False):
+    def _binance_request(self, method, endpoint, params=None, signed=False, is_data=False):
         try:
-            url = f"{self.binance_base}{endpoint}"
+            # اختيار الرابط المناسب: بيانات أم تداول
+            base = self.binance_data_url if is_data else self.binance_trade_url
+            url = f"{base}{endpoint}"
             headers = {}
+            
             if signed:
                 if not self.binance_api_key or not self.binance_api_secret: return None
                 params = self._sign(params or {})
@@ -106,16 +112,21 @@ class LegendarySniperBot:
             else:
                 r = requests.post(url, params=params, headers=headers, timeout=15)
 
-            if r.status_code == 200: return r.json()
-            elif r.status_code == 429: time.sleep(10); return None
-            else: return None
-        except: return None
+            if r.status_code == 200: 
+                return r.json()
+            elif r.status_code == 429: 
+                time.sleep(10); return None
+            else: 
+                return None
+        except: 
+            return None
 
     # ═══════════════════════════════════════════════════
     #       تحميل الأزواج وحجوم الخطوات
     # ═══════════════════════════════════════════════════
     def _load_usdt_pairs(self):
-        data = self._binance_request('GET', '/api/v3/exchangeInfo')
+        # استخدام is_data=True لتجنب الحظر
+        data = self._binance_request('GET', '/api/v3/exchangeInfo', is_data=True)
         if not data: return
         new_pairs, new_symbols_set = [], set()
         for s in data.get('symbols', []):
@@ -132,10 +143,10 @@ class LegendarySniperBot:
 
         self.usdt_pairs = new_pairs
         self.known_symbols = new_symbols_set
+        self.tg(f"✅ تم تحميل *{len(self.usdt_pairs)}* زوج USDT من بينانس.")
 
     def _load_step_sizes(self):
-        """حفظ خطوات الكمية مسبقاً لتسريع التداول"""
-        data = self._binance_request('GET', '/api/v3/exchangeInfo')
+        data = self._binance_request('GET', '/api/v3/exchangeInfo', is_data=True)
         if not data: return
         for s in data.get('symbols', []):
             for f in s.get('filters', []):
@@ -151,7 +162,8 @@ class LegendarySniperBot:
     #        وحدة جلب بيانات الشموع
     # ═══════════════════════════════════════════════════
     def get_klines(self, symbol, interval='1h', limit=100):
-        data = self._binance_request('GET', '/api/v3/klines', {'symbol': symbol, 'interval': interval, 'limit': limit})
+        # استخدام is_data=True
+        data = self._binance_request('GET', '/api/v3/klines', {'symbol': symbol, 'interval': interval, 'limit': limit}, is_data=True)
         if data and len(data) > 20:
             df = pd.DataFrame(data, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_volume', 'trades', 'taker_buy_vol', 'taker_buy_quote_vol', 'ignore'])
             for col in ['open', 'high', 'low', 'close', 'volume', 'quote_volume']: df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -194,8 +206,10 @@ class LegendarySniperBot:
                 result['score'] -= 2; result['signals'].append("📉 EMA9 تقاطع تحت EMA21")
 
             # 4. Bollinger Bands
-            bb_lower = ta.volatility.BollingerBands(df['close']).bollinger_lband().iloc[-1]
-            if price <= bb_lower: result['score'] += 3; result['signals'].append("📈 لامس البولنجر السفلي (ارتداد)")
+            bb = ta.volatility.BollingerBands(df['close'])
+            bb_lower = bb.bollinger_lband().iloc[-1]
+            if not pd.isna(bb_lower) and price <= bb_lower: 
+                result['score'] += 3; result['signals'].append("📈 لامس البولنجر السفلي (ارتداد)")
 
             # 5. Volume
             vol_avg, vol_current = df['volume'].rolling(20).mean().iloc[-1], df.iloc[-1]['volume']
@@ -233,6 +247,9 @@ class LegendarySniperBot:
 
         atr_indicator = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14)
         atr = atr_indicator.average_true_range().iloc[-1]
+        if pd.isna(atr): # حماية إضافية
+            return entry_price * 0.97, entry_price * 1.06, entry_price * 1.03, 3.0
+            
         atr_pct = (atr / entry_price) * 100
 
         sl_distance = atr_pct * 1.5
@@ -244,10 +261,9 @@ class LegendarySniperBot:
         tp1_price = entry_price * (1 + tp1_distance / 100)
 
         # حدود أمان
-        sl_price = max(sl_price, entry_price * 0.90) # لا نخسر أكثر من 10%
-        sl_price = min(sl_price, entry_price * 0.98) # لا نضع وقف أقل من 2%
-        
-        trailing_distance_pct = max(trailing_distance_pct, 1.5) # لا يقل الوقف المتحرك عن 1.5%
+        sl_price = max(sl_price, entry_price * 0.90)
+        sl_price = min(sl_price, entry_price * 0.98)
+        trailing_distance_pct = max(trailing_distance_pct, 1.5)
 
         return round(sl_price, 6), round(tp1_price, 6), round(trailing_activation, 6), round(trailing_distance_pct, 2)
 
@@ -255,6 +271,7 @@ class LegendarySniperBot:
     #       التداول التلقائي (شراء وبيع Spot)
     # ═══════════════════════════════════════════════════
     def get_usdt_balance(self):
+        # تداول: نستخدم الرابط العادي
         data = self._binance_request('GET', '/api/v3/account', signed=True)
         if data:
             for b in data.get('balances', []):
@@ -274,6 +291,7 @@ class LegendarySniperBot:
         sl_price, tp_price, trailing_act, trailing_dist = self.calculate_dynamic_sl_tp(symbol, price)
 
         self.tg(f"⏳ جاري تنفيذ شراء `{symbol}` (وقف مرن)...")
+        # تداول: نستخدم الرابط العادي
         result = self._binance_request('POST', '/api/v3/order', {
             'symbol': symbol, 'side': 'BUY', 'type': 'MARKET', 'quoteOrderQty': round(trade_amount, 2)
         }, signed=True)
@@ -299,7 +317,7 @@ class LegendarySniperBot:
             msg += f"🔄 تفعيل المتحرك عند: `{trailing_act:.6f}`\n📏 مسافة التتبع: `{trailing_dist}%`\n📈 نقاط: *{score}*"
             self.tg(msg)
         else:
-            self.tg(f"❌ فشل تنفيذ الشراء على `{symbol}`")
+            self.tg(f"❌ فشل تنفيذ الشراء على `{symbol}` (تأكد من الرصيد أو قيود الـ API)")
 
     # ═══════════════════════════════════════════════════
     #    مراقبة الصفقات بالوقف المتحرك (Trailing)
@@ -309,7 +327,8 @@ class LegendarySniperBot:
 
         for symbol in list(self.active_trades.keys()):
             trade = self.active_trades[symbol]
-            ticker = self._binance_request('GET', '/api/v3/ticker/price', {'symbol': symbol})
+            # استخدام is_data=True لجلب السعر (أسرع ولا يحظر)
+            ticker = self._binance_request('GET', '/api/v3/ticker/price', {'symbol': symbol}, is_data=True)
             if not ticker: continue
             
             current_price = float(ticker['price'])
@@ -328,7 +347,7 @@ class LegendarySniperBot:
             # 2. تفعيل الوقف المتحرك عند هدف الربح الأول
             elif current_price >= trade['take_profit'] and not trade['trailing_active']:
                 trade['trailing_active'] = True
-                trade['stop_loss'] = entry_price * 1.005  # نقل الوقف للدخول + 0.5% لضمان عدم الخسارة
+                trade['stop_loss'] = entry_price * 1.005
                 msg = f"⚡ *تفعيل الوقف المتحرك! `{symbol}`*\n🎯 وصلنا الهدف الأول\n📈 الربح: {current_profit_pct:.1f}%\n🛑 الوقف الجديد: `{trade['stop_loss']:.6f}` (ضمان الربح)"
                 self.tg(msg)
                 self._save_active_trades()
@@ -351,6 +370,7 @@ class LegendarySniperBot:
             if closed:
                 step_size = self.step_sizes_cache.get(symbol, 1)
                 qty = self.adjust_quantity(trade['quantity'], step_size)
+                # تداول: نستخدم الرابط العادي للبيع
                 result = self._binance_request('POST', '/api/v3/order', {
                     'symbol': symbol, 'side': 'SELL', 'type': 'MARKET', 'quantity': qty
                 }, signed=True)
@@ -412,7 +432,8 @@ class LegendarySniperBot:
         except: pass
 
     def detect_volume_spikes(self):
-        data = self._binance_request('GET', '/api/v3/ticker/24hr')
+        # استخدام is_data=True
+        data = self._binance_request('GET', '/api/v3/ticker/24hr', is_data=True)
         if not data: return
         spikes = []
         for t in data:
@@ -463,7 +484,7 @@ class LegendarySniperBot:
     # ═══════════════════════════════════════════════════
     def run(self):
         mode_msg = "⚔️ تداول تلقائي" if self.TRADE_ENABLED else "👁️ مراقبة فقط"
-        self.tg(f"🤖 *القناط الأسطوري بدأ العمل!* ({mode_msg})\n⏰ المسح السريع: 15 د | المصادر: 30 د | الشامل: 3 س\n👀 المراقبة: كل دقيقة")
+        self.tg(f"🤖 *القناص الأسطوري بدأ العمل!* ({mode_msg})\n⏰ المسح السريع: 15 د | المصادر: 30 د | الشامل: 3 س\n👀 المراقبة: كل دقيقة")
         
         while True:
             try:
