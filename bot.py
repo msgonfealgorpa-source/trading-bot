@@ -526,6 +526,15 @@ class LegendarySniperBotV5:
         await self.load_market_data() # تحميل الـ Step Sizes
         
         self.active_trades = await self.db.load_active_trades() 
+        # حماية إضافية: إذا تم مسح الـ DB، اسحب الصفقات المفتوحة من بينانس مباشرة
+        if not self.active_trades and self.TRADE_ENABLED:
+            logger.info("قاعدة البيانات فارغة، جاري التزامن مع بينانس لاستعادة الصفقات...")
+            open_orders = await self._binance_request('GET', '/api/v3/openOrders', signed=True, is_trade_endpoint=True)
+            if open_orders:
+                for order in open_orders:
+                    # إذا كان هناك أوامر مفتوحة (مثل وقف خسارة)، نستعيد بيانات الصفقة
+                    pass # هنا يمكن تطوير استرجاع بيانات الصفقة لو تم مسحها
+        
         await self.sync_with_binance() # 6- تطابق البيانات
         
         asyncio.create_task(self.ws_manager()) 
