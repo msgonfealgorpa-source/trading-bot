@@ -66,7 +66,7 @@ class LegendarySniperBotV3:
         self.stats = {'total_scans': 0, 'signals_found': 0, 'trades_executed': 0, 'wins': 0, 'losses': 0}
         self.step_sizes_cache = {}
         
-        self.ws_url = "wss://stream.binance.com:9443/ws"
+        self.ws_url = "wss://testnet.binance.vision/ws"
         self.live_prices = {}
         self.session = None
 
@@ -97,7 +97,7 @@ class LegendarySniperBotV3:
 
     async def _binance_request(self, method, endpoint, params=None, signed=False):
         try:
-            base = "https://api.binance.com"
+            base = "https://testnet.binance.vision"
             url = f"{base}{endpoint}"
             headers = {}
             if signed:
