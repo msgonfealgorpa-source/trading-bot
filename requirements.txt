@@ -1,5 +1,7 @@
-pandas
-ta
 aiohttp
+pandas
+numpy
+ta
 websockets
 requests
+aiosqlite
