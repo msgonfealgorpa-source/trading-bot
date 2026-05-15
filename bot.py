@@ -204,7 +204,7 @@ class LegendarySniperBotV3:
         return None
 
     # ═══════════════════════════════════════════════════
-    #     التحليل متعدد الأطر الزمنية والمؤشرات
+    #     التحليل متعدد الأطر الزمنية والمؤشرات (معدل)
     # ═══════════════════════════════════════════════════
     async def analyze_coin(self, symbol):
         try:
@@ -222,36 +222,44 @@ class LegendarySniperBotV3:
             price = df_15m.iloc[-1]['close']
             result = {'symbol': symbol, 'price': price, 'score': 0, 'signals': [], 'direction': None, 'ob_zone': None}
 
-            # 3. كشف الأوردر بلوك على إطار 15 دقيقة
-            ob = self.detect_order_blocks(df_15m, is_bullish_trend)
-            if ob and is_bullish_trend and ob['type'] == 'bullish':
-                # هل السعر يرتد من منطقة الطلب الآن؟
-                if ob['low'] <= price <= ob['high'] * 1.005:
-                    result['score'] += 5
-                    result['signals'].append("🧠 ارتداد من Order Block صعودي (SMC)")
-                    result['ob_zone'] = ob
-            elif ob and not is_bullish_trend and ob['type'] == 'bearish':
-                if ob['high'] >= price >= ob['low'] * 0.995:
-                    result['score'] -= 5
-                    result['signals'].append("🧠 ارتداد من Order Block هبوطي (SMC)")
-
-            # 4. مؤشرات إطار 15 دقيقة
+            # ═══ المؤشرات التقليدية (الأساس) ═══
             rsi_val = ta.momentum.RSIIndicator(df_15m['close'], window=14).rsi().iloc[-1]
-            if is_bullish_trend and rsi_val < 35: result['score'] += 3; result['signals'].append(f"📈 RSI تشبع بيعي ({rsi_val:.0f})")
-            elif not is_bullish_trend and rsi_val > 65: result['score'] -= 3; result['signals'].append(f"📉 RSI تشبع شرائي ({rsi_val:.0f})")
+            if is_bullish_trend and rsi_val < 35: 
+                result['score'] += 2; result['signals'].append(f"📈 RSI تشبع بيعي ({rsi_val:.0f})")
 
             macd_ind = ta.trend.MACD(df_15m['close'])
             if macd_ind.macd().iloc[-1] > macd_ind.macd_signal().iloc[-1] and macd_ind.macd().iloc[-2] <= macd_ind.macd_signal().iloc[-2]:
                 result['score'] += 2; result['signals'].append("📈 MACD تقاطع صعودي")
-            elif macd_ind.macd().iloc[-1] < macd_ind.macd_signal().iloc[-1] and macd_ind.macd().iloc[-2] >= macd_ind.macd_signal().iloc[-2]:
-                result['score'] -= 2; result['signals'].append("📉 MACD تقاطع هبوطي")
+
+            ema9, ema21 = ta.trend.EMAIndicator(df_15m['close'], window=9).ema_indicator(), ta.trend.EMAIndicator(df_15m['close'], window=21).ema_indicator()
+            if ema9.iloc[-1] > ema21.iloc[-1] and ema9.iloc[-2] <= ema21.iloc[-2]:
+                result['score'] += 2; result['signals'].append("📈 EMA تقاطع صعودي")
 
             vol_avg = df_15m['volume'].rolling(20).mean().iloc[-1]
-            if df_15m.iloc[-1]['volume'] > vol_avg * 2: result['score'] += 2; result['signals'].append("🔥 حجم عالي")
+            if df_15m.iloc[-1]['volume'] > vol_avg * 2: 
+                result['score'] += 2; result['signals'].append("🔥 حجم عالي")
 
-            # شروط الإتجاه الصارمة
-            if is_bullish_trend and result['score'] >= self.MIN_SCORE_TO_TRADE: result['direction'] = 'BUY'
-            elif not is_bullish_trend and result['score'] <= -self.MIN_SCORE_TO_TRADE: result['direction'] = 'SELL'
+            # ═══ الأوردر بلوك SMC (التأكيد المعزز) ═══
+            ob = self.detect_order_blocks(df_15m, is_bullish_trend)
+            if ob and is_bullish_trend and ob['type'] == 'bullish':
+                # هل السعر يرتد من منطقة الطلب الآن؟
+                if ob['low'] <= price <= ob['high'] * 1.01:
+                    result['score'] += 4  # نقاط تأكيدية قوية!
+                    result['signals'].append("🧠 ارتداد من Order Block (فرصة ذهبية!)")
+                    result['ob_zone'] = ob
+            
+            # نفس المنطق للبيع
+            elif ob and not is_bullish_trend and ob['type'] == 'bearish':
+                if ob['high'] >= price >= ob['low'] * 0.99:
+                    result['score'] -= 4
+                    result['signals'].append("🧠 ارتداد من Order Block هبوطي")
+
+            # تحديد الاتجاه بناءً على مجموع النقاط (الأساس + التأكيد)
+            # الحد الأدنى الافتراضي 5 أو 6
+            if is_bullish_trend and result['score'] >= self.MIN_SCORE_TO_TRADE: 
+                result['direction'] = 'BUY'
+            elif not is_bullish_trend and result['score'] <= -self.MIN_SCORE_TO_TRADE: 
+                result['direction'] = 'SELL'
 
             return result
         except Exception as e:
