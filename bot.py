@@ -1,157 +1,334 @@
 """
 ═══════════════════════════════════════════════════════════════
-  🔥 القناص الأسطوري V2.1 — النسخة الكاملة المرنة والمصلحة 🔥
+  🔥 القناص الأسطوري V3.0 — النسخة الاحترافية العالمية 🔥
 ═══════════════════════════════════════════════════════════════
-  ✅ تحليل 7 مؤشرات فنية
-  ✅ وقف خسارة وهدف ربح مرن (Trailing Stop) يتبع السعر ليحقق أرباح 100%+
-  ✅ بحث في 5 مصادر مجانية (بينانس، كوينجيكو، دكس سكرينر، الخوف والطمع)
-  ✅ تداول فوري (Spot) آمن بدون تصفية
-  ✅ إصلاح مشكلة حظر بينانس للـ IP على الخوادم السحابية
-  ✅ يعمل على Railway / Replit / Termux
+  ✅ WebSockets للبيانات اللحظية (Trailing Stop فائق السرعة)
+  ✅ Asyncio لفحص 50 عملة في نفس اللحظة
+  ✅ تحليل متعدد الأطر الزمنية (4H للاتجاه + 15m للدخول)
+  ✅ دمج مفهوم الأوردر بلوك (Order Blocks - SMC)
+  ✅ نظام تسجيل أخطاء احترافي (Logging) مع تنبيهات تيليجرام
+  ✅ وضع الفحص الرجعي (Backtesting Mode)
 ═══════════════════════════════════════════════════════════════
 """
 
-import time, pandas as pd, ta, requests, datetime, os, sys, json, hmac, hashlib, math
-from zoneinfo import ZoneInfo
+import asyncio, aiohttp, json, math, os, sys, time, logging
+import pandas as pd
+import ta
+import hmac
+import hashlib
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
+import websockets
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
+# ═══ إعداد نظام التسجيل الاحترافي (Logging) ═══
+logger = logging.getLogger('SniperBot')
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
-class LegendarySniperBot:
+# ملف لحفظ السجلات
+file_handler = logging.FileHandler('bot.log', encoding='utf-8')
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
+# طباعة في الكونسول
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+
+class TelegramLoggingHandler(logging.Handler):
+    """إرسال الأخطاء الحرجة للتيليجرام"""
+    def __init__(self, bot_instance):
+        super().__init__()
+        self.bot = bot_instance
+
+    def emit(self, record):
+        if record.levelno >= logging.ERROR:
+            msg = f"🚨 *خطأ حرج في البوت:*\n```\n{self.format(record)[:500]}\n```"
+            asyncio.ensure_future(self.bot.tg(msg))
+
+class LegendarySniperBotV3:
     def __init__(self):
-        # ═══ إعدادات تيليجرام ═══
         self.tg_token = os.environ.get('TELEGRAM_TOKEN', '')
         self.tg_chat = os.environ.get('CHAT_ID', '')
 
-        # ═══ إعدادات بينانس API ═══
         self.binance_api_key = os.environ.get('BINANCE_API_KEY', '')
         self.binance_api_secret = os.environ.get('BINANCE_API_SECRET', '')
-        # رابطين: واحد لقراءة البيانات (لا يحظره الكلاود) وواحد للتداول
-        self.binance_trade_url = 'https://api.binance.com'
-        self.binance_data_url = 'https://data-api.binance.vision'
-
-        # ═══ إعدادات التداول والمخاطر ═══
+        
         self.TRADE_ENABLED = os.environ.get('TRADE_ENABLED', 'false').lower() == 'true'
+        self.BACKTEST_MODE = os.environ.get('BACKTEST_MODE', 'false').lower() == 'true'
         self.RISK_PER_TRADE_PCT = float(os.environ.get('RISK_PCT', '2'))
-        self.MIN_SCORE_TO_TRADE = int(os.environ.get('MIN_SCORE', '5'))
+        self.MIN_SCORE_TO_TRADE = int(os.environ.get('MIN_SCORE', '6')) # تم رفعه لوجود SMC
         self.MAX_OPEN_TRADES = int(os.environ.get('MAX_TRADES', '3'))
         self.MIN_TRADE_USDT = float(os.environ.get('MIN_TRADE_USDT', '10'))
 
-        # ═══ متغيرات داخلية ═══
         self.TZ = ZoneInfo("Africa/Tripoli")
         self.usdt_pairs = []
         self.known_symbols = set()
         self.active_trades = {}
-        self.stats = {'total_scans': 0, 'signals_found': 0, 'trades_executed': 0, 'wins': 0, 'losses': 0}
+        self.stats = {'total_scans': 0, 'signals_found': 0, 'trades_executed': 0, 'wins': 0, 'losses': 0'}
         self.step_sizes_cache = {}
+        
+        # WebSockets & Async
+        self.ws_url = "wss://stream.binance.com:9443/ws"
+        self.live_prices = {} # تخزين الأسعار اللحظية
+        self.session = None
 
-        # مؤقتات
-        self.last_announcement_check = 0
-        self.last_coingecko_check = 0
-        self.last_dexscreener_check = 0
-        self.last_fear_greed_check = 0
-        self.last_full_scan = 0
-        self.last_volume_scan = 0
+        # ربط نظام التسجيل مع التيليجرام
+        tg_handler = TelegramLoggingHandler(self)
+        tg_handler.setLevel(logging.ERROR)
+        logger.addHandler(tg_handler)
 
-        # ═══ رسالة التشغيل ═══
-        mode = "⚔️ تداول تلقائي (Spot)" if self.TRADE_ENABLED else "👁️ مراقبة فقط (آمن)"
-        msg = "🔥 *القناص الأسطوري V2.1 — النسخة المصلحة!*\n"
-        msg += "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        msg += f"📡 الوضع: {mode}\n"
-        msg += f"💰 مخاطرة/صفقة: {self.RISK_PER_TRADE_PCT}%\n"
-        msg += f"🔄 وقف الخسارة: مرن (ATR + Trailing)\n"
-        msg += f"📊 حد النقاط: {self.MIN_SCORE_TO_TRADE}\n"
-        msg += "⏳ جاري تحميل بيانات السوق..."
-        self.tg(msg)
-
-        self._load_usdt_pairs()
-        self._load_step_sizes()
-        self._load_active_trades()
+        mode = "🧪 وضع الفحص الرجعي (Backtest)" if self.BACKTEST_MODE else ("⚔️ تداول تلقائي" if self.TRADE_ENABLED else "👁️ مراقبة فقط")
+        logger.info(f"🔥 القناص الأسطوري V3.0 بدأ التشغيل — الوضع: {mode}")
 
     # ═══════════════════════════════════════════════════
-    #              وحدة تيليجرام
+    #          وحدة تيليجرام (Async)
     # ═══════════════════════════════════════════════════
-    def tg(self, msg):
+    async def tg(self, msg):
         try:
+            if not self.tg_token or not self.tg_chat: return
             if len(msg) > 4000:
                 for i in range(0, len(msg), 4000):
-                    requests.post(f"https://api.telegram.org/bot{self.tg_token}/sendMessage",
-                                 data={'chat_id': self.tg_chat, 'text': msg[i:i+4000], 'parse_mode': 'Markdown'}, timeout=10)
-                    time.sleep(0.5)
+                    await self.session.post(f"https://api.telegram.org/bot{self.tg_token}/sendMessage",
+                                            data={'chat_id': self.tg_chat, 'text': msg[i:i+4000], 'parse_mode': 'Markdown'})
+                    await asyncio.sleep(0.5)
             else:
-                requests.post(f"https://api.telegram.org/bot{self.tg_token}/sendMessage",
-                             data={'chat_id': self.tg_chat, 'text': msg, 'parse_mode': 'Markdown'}, timeout=10)
-        except: pass
+                await self.session.post(f"https://api.telegram.org/bot{self.tg_token}/sendMessage",
+                                        data={'chat_id': self.tg_chat, 'text': msg, 'parse_mode': 'Markdown'})
+        except Exception as e:
+            logger.error(f"فشل إرسال رسالة تيليجرام: {e}")
 
     # ═══════════════════════════════════════════════════
-    #          وحدة بينانس API الأساسية
+    #     وحدة بينانس API الأساسية (Async)
     # ═══════════════════════════════════════════════════
     def _sign(self, params):
         params['timestamp'] = int(time.time() * 1000)
         query = urlencode(params)
-        signature = hmac.new(self.binance_api_secret.encode('utf-8'), query.encode('utf-8'), hashlib.sha256).hexdigest()
+        signature = hmac.new(self.binance_api_secret.encode(), query.encode(), hashlib.sha256).hexdigest()
         params['signature'] = signature
         return params
 
-    def _binance_request(self, method, endpoint, params=None, signed=False, is_data=False):
+    async def _binance_request(self, method, endpoint, params=None, signed=False):
         try:
-            # اختيار الرابط المناسب: بيانات أم تداول
-            base = self.binance_data_url if is_data else self.binance_trade_url
+            base = "https://api.binance.com"
             url = f"{base}{endpoint}"
             headers = {}
-            
             if signed:
-                if not self.binance_api_key or not self.binance_api_secret: return None
+                if not self.binance_api_key: return None
                 params = self._sign(params or {})
                 headers = {'X-MBX-APIKEY': self.binance_api_key}
 
-            if method == 'GET':
-                r = requests.get(url, params=params, headers=headers, timeout=15)
-            else:
-                r = requests.post(url, params=params, headers=headers, timeout=15)
-
-            if r.status_code == 200: 
-                return r.json()
-            elif r.status_code == 429: 
-                time.sleep(10); return None
-            else: 
-                return None
-        except: 
+            async with self.session.request(method, url, params=params, headers=headers) as r:
+                if r.status == 200: return await r.json()
+                elif r.status == 429: 
+                    logger.warning("تم حظر الطلب مؤقتاً (429)، انتظار 10 ثوان...")
+                    await asyncio.sleep(10); return None
+                else: 
+                    logger.error(f"خطأ API بينانس: {r.status} - {await r.text()}")
+                    return None
+        except Exception as e:
+            logger.error(f"استثناء في طلب بينانس: {e}")
             return None
 
     # ═══════════════════════════════════════════════════
     #       تحميل الأزواج وحجوم الخطوات
     # ═══════════════════════════════════════════════════
-    def _load_usdt_pairs(self):
-        # استخدام is_data=True لتجنب الحظر
-        data = self._binance_request('GET', '/api/v3/exchangeInfo', is_data=True)
+    async def load_market_data(self):
+        data = await self._binance_request('GET', '/api/v3/exchangeInfo')
         if not data: return
         new_pairs, new_symbols_set = [], set()
         for s in data.get('symbols', []):
             if s['quoteAsset'] == 'USDT' and s['status'] == 'TRADING':
                 new_pairs.append({'symbol': s['symbol'], 'baseAsset': s['baseAsset']})
                 new_symbols_set.add(s['symbol'])
+                for f in s.get('filters', []):
+                    if f['filterType'] == 'LOT_SIZE':
+                        self.step_sizes_cache[s['symbol']] = float(f['stepSize'])
         
-        if self.known_symbols:
-            newly_listed = new_symbols_set - self.known_symbols
-            if newly_listed:
-                msg = "🆕 *عملات مدرجة حديثاً على بينانس!*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                for sym in newly_listed: msg += f"⚡ `{sym}` — تم الإدراج للتو!\n"
-                self.tg(msg)
+        if self.known_symbols and (new_symbols_set - self.known_symbols):
+            new_coins = new_symbols_set - self.known_symbols
+            msg = "🆕 *عملات مدرجة حديثاً!*\n" + "\n".join([f"⚡ `{c}`" for c in new_coins])
+            await self.tg(msg)
 
         self.usdt_pairs = new_pairs
         self.known_symbols = new_symbols_set
-        self.tg(f"✅ تم تحميل *{len(self.usdt_pairs)}* زوج USDT من بينانس.")
+        logger.info(f"تم تحميل {len(self.usdt_pairs)} زوج.")
 
-    def _load_step_sizes(self):
-        data = self._binance_request('GET', '/api/v3/exchangeInfo', is_data=True)
-        if not data: return
-        for s in data.get('symbols', []):
-            for f in s.get('filters', []):
-                if f['filterType'] == 'LOT_SIZE':
-                    self.step_sizes_cache[s['symbol']] = float(f['stepSize'])
+    # ═══════════════════════════════════════════════════
+    #       جلب الشموع (Async) لأطر زمنية متعددة
+    # ═══════════════════════════════════════════════════
+    async def get_klines(self, symbol, interval='15m', limit=100):
+        data = await self._binance_request('GET', '/api/v3/klines', {'symbol': symbol, 'interval': interval, 'limit': limit})
+        if data and len(data) > 20:
+            df = pd.DataFrame(data, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_volume', 'trades', 'taker_buy_vol', 'taker_buy_quote_vol', 'ignore'])
+            for col in ['open', 'high', 'low', 'close', 'volume']: df[col] = pd.to_numeric(df[col], errors='coerce')
+            df['time'] = pd.to_datetime(df['time'], unit='ms')
+            return df
+        return None
+
+    # ═══════════════════════════════════════════════════
+    #     خوارزمية الأوردر بلوك (SMC)
+    # ═══════════════════════════════════════════════════
+    def detect_order_blocks(self, df, is_bullish_trend):
+        """
+        كشف مناطق العرض والطلب (Order Blocks)
+        إذا كان الاتجاه صعودي، نبحث عن آخر أوردر بلوك صعودي (طلب) لنشتري منه.
+        """
+        if df is None or len(df) < 10: return None
+        
+        # الأوردر بلوك الصعودي: آخر شمعة هابطة قبل دفع صعودي قوي
+        if is_bullish_trend:
+            for i in range(len(df)-1, 3, -1):
+                prev_candle = df.iloc[i-1]
+                curr_candle = df.iloc[i]
+                # إذا كانت الشمعة السابقة هابطة والشمعة الحالية صعودية قوية (هيكل كسر)
+                if prev_candle['close'] < prev_candle['open'] and curr_candle['close'] > prev_candle['high']:
+                    ob_high = prev_candle['high']
+                    ob_low = prev_candle['low']
+                    return {'type': 'bullish', 'high': ob_high, 'low': ob_low}
+        
+        # الأوردر بلوك الهبوطي: آخر شمعة صاعدة قبل دفع هبوطي قوي
+        elif not is_bullish_trend:
+            for i in range(len(df)-1, 3, -1):
+                prev_candle = df.iloc[i-1]
+                curr_candle = df.iloc[i]
+                if prev_candle['close'] > prev_candle['open'] and curr_candle['close'] < prev_candle['low']:
+                    ob_high = prev_candle['high']
+                    ob_low = prev_candle['low']
+                    return {'type': 'bearish', 'high': ob_high, 'low': ob_low}
+                    
+        return None
+
+    # ═══════════════════════════════════════════════════
+    #     التحليل متعدد الأطر الزمنية والمؤشرات
+    # ═══════════════════════════════════════════════════
+    async def analyze_coin(self, symbol):
+        try:
+            # 1. إطار 4 ساعات لتحديد الاتجاه العام
+            df_4h = await self.get_klines(symbol, '4h', 50)
+            if df_4h is None or len(df_4h) < 50: return None
+            
+            ema50_4h = ta.trend.EMAIndicator(df_4h['close'], window=50).ema_indicator().iloc[-1]
+            is_bullish_trend = df_4h.iloc[-1]['close'] > ema50_4h
+
+            # 2. إطار 15 دقيقة لنقطة الدخول الدقيقة والمؤشرات
+            df_15m = await self.get_klines(symbol, '15m', 100)
+            if df_15m is None or len(df_15m) < 50: return None
+
+            price = df_15m.iloc[-1]['close']
+            result = {'symbol': symbol, 'price': price, 'score': 0, 'signals': [], 'direction': None, 'ob_zone': None}
+
+            # 3. كشف الأوردر بلوك على إطار 15 دقيقة
+            ob = self.detect_order_blocks(df_15m, is_bullish_trend)
+            if ob and is_bullish_trend and ob['type'] == 'bullish':
+                # هل السعر يرتد من منطقة الطلب الآن؟
+                if ob['low'] <= price <= ob['high'] * 1.005:
+                    result['score'] += 5
+                    result['signals'].append("🧠 ارتداد من Order Block صعودي (SMC)")
+                    result['ob_zone'] = ob
+            elif ob and not is_bullish_trend and ob['type'] == 'bearish':
+                if ob['high'] >= price >= ob['low'] * 0.995:
+                    result['score'] -= 5
+                    result['signals'].append("🧠 ارتداد من Order Block هبوطي (SMC)")
+
+            # 4. مؤشرات إطار 15 دقيقة
+            rsi_val = ta.momentum.RSIIndicator(df_15m['close'], window=14).rsi().iloc[-1]
+            if is_bullish_trend and rsi_val < 35: result['score'] += 3; result['signals'].append(f"📈 RSI تشبع بيعي ({rsi_val:.0f})")
+            elif not is_bullish_trend and rsi_val > 65: result['score'] -= 3; result['signals'].append(f"📉 RSI تشبع شرائي ({rsi_val:.0f})")
+
+            macd_ind = ta.trend.MACD(df_15m['close'])
+            if macd_ind.macd().iloc[-1] > macd_ind.macd_signal().iloc[-1] and macd_ind.macd().iloc[-2] <= macd_ind.macd_signal().iloc[-2]:
+                result['score'] += 2; result['signals'].append("📈 MACD تقاطع صعودي")
+            elif macd_ind.macd().iloc[-1] < macd_ind.macd_signal().iloc[-1] and macd_ind.macd().iloc[-2] >= macd_ind.macd_signal().iloc[-2]:
+                result['score'] -= 2; result['signals'].append("📉 MACD تقاطع هبوطي")
+
+            vol_avg = df_15m['volume'].rolling(20).mean().iloc[-1]
+            if df_15m.iloc[-1]['volume'] > vol_avg * 2: result['score'] += 2; result['signals'].append("🔥 حجم عالي")
+
+            # شروط الإتجاه الصارمة
+            if is_bullish_trend and result['score'] >= self.MIN_SCORE_TO_TRADE: result['direction'] = 'BUY'
+            elif not is_bullish_trend and result['score'] <= -self.MIN_SCORE_TO_TRADE: result['direction'] = 'SELL'
+
+            return result
+        except Exception as e:
+            logger.error(f"خطأ في تحليل {symbol}: {e}")
+            return None
+
+    # ═══════════════════════════════════════════════════
+    #     WebSockets لمراقبة الأسعار لحظياً (Trailing)
+    # ═══════════════════════════════════════════════════
+    async def websocket_listener(self):
+        while True:
+            try:
+                async with websockets.connect(self.ws_url) as ws:
+                    # الاشتراك في تحديثات جميع الأزواج (Mini Ticker)
+                    subscribe_msg = {
+                        "method": "SUBSCRIBE",
+                        "params": ["!miniTicker@arr"],
+                        "id": 1
+                    }
+                    await ws.send(json.dumps(subscribe_msg))
+                    logger.info("✅ متصل بـ WebSockets لبينانس (أسعار لحظية)")
+                    
+                    while True:
+                        msg = await ws.recv()
+                        data = json.loads(msg)
+                        if isinstance(data, list):
+                            for t in data:
+                                self.live_prices[t['s']] = float(t['c']) # تحديث السعر اللحظي
+            except Exception as e:
+                logger.error(f"خطأ في WebSocket: {e}. إعادة الاتصال بعد 5 ثوان...")
+                await asyncio.sleep(5)
+
+    # ═══════════════════════════════════════════════════
+    #    مراقبة الصفقات بالوقف المتحرك (Trailing) فائق السرعة
+    # ═══════════════════════════════════════════════════
+    async def monitor_trades(self):
+        if not self.active_trades: return
+
+        for symbol in list(self.active_trades.keys()):
+            trade = self.active_trades[symbol]
+            current_price = self.live_prices.get(symbol)
+            
+            if not current_price: continue # لا يوجد سعر لحظي بعد
+            
+            entry_price = trade['entry_price']
+            if current_price > trade['highest_price']: trade['highest_price'] = current_price
+            current_profit_pct = ((current_price - entry_price) / entry_price) * 100
+
+            closed, close_reason = False, ""
+
+            if current_price <= trade['stop_loss'] and not trade['trailing_active']:
+                closed, close_reason = True, "🛑 ضرب وقف الخسارة"
+            elif current_price >= trade['take_profit'] and not trade['trailing_active']:
+                trade['trailing_active'] = True
+                trade['stop_loss'] = entry_price * 1.005
+                await self.tg(f"⚡ *تفعيل الوقف المتحرك! `{symbol}`*\n🛑 الوقف الجديد: `{trade['stop_loss']:.6f}`")
+                self._save_active_trades()
+            elif trade['trailing_active']:
+                new_sl = trade['highest_price'] * (1 - trade['trailing_distance_pct'] / 100)
+                if new_sl > trade['stop_loss']: trade['stop_loss'] = new_sl
+                if current_price <= trade['stop_loss']:
+                    closed, close_reason = True, "🔄 وقف متحرك حافظ على الأرباح!"
+
+            if closed:
+                step_size = self.step_sizes_cache.get(symbol, 1)
+                qty = self.adjust_quantity(trade['quantity'], step_size)
+                # بيع فعلي
+                if self.TRADE_ENABLED:
+                    result = await self._binance_request('POST', '/api/v3/order', {'symbol': symbol, 'side': 'SELL', 'type': 'MARKET', 'quantity': qty}, signed=True)
+                
+                pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                if pnl_pct > 0: self.stats['wins'] += 1
+                else: self.stats['losses'] += 1
+
+                await self.tg(f"🏁 *إغلاق `{symbol}`*\n{close_reason}\n💵 النتيجة: `{pnl_pct:+.2f}%`")
+                del self.active_trades[symbol]
+                self._save_active_trades()
 
     def adjust_quantity(self, quantity, step_size):
         if step_size >= 1: return math.floor(quantity)
@@ -159,370 +336,180 @@ class LegendarySniperBot:
         return math.floor(quantity * (10 ** precision)) / (10 ** precision)
 
     # ═══════════════════════════════════════════════════
-    #        وحدة جلب بيانات الشموع
+    #          المسح المتوازي (Asyncio)
     # ═══════════════════════════════════════════════════
-    def get_klines(self, symbol, interval='1h', limit=100):
-        # استخدام is_data=True
-        data = self._binance_request('GET', '/api/v3/klines', {'symbol': symbol, 'interval': interval, 'limit': limit}, is_data=True)
-        if data and len(data) > 20:
-            df = pd.DataFrame(data, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_volume', 'trades', 'taker_buy_vol', 'taker_buy_quote_vol', 'ignore'])
-            for col in ['open', 'high', 'low', 'close', 'volume', 'quote_volume']: df[col] = pd.to_numeric(df[col], errors='coerce')
-            df['time'] = pd.to_datetime(df['time'], unit='ms')
-            return df
-        return None
-
-    # ═══════════════════════════════════════════════════
-    #     التحليل المتعدد المؤشرات (7 مؤشرات)
-    # ═══════════════════════════════════════════════════
-    def analyze_coin(self, symbol):
-        df = self.get_klines(symbol, '1h', 100)
-        if df is None or len(df) < 50: return None
-
-        result = {'symbol': symbol, 'price': df.iloc[-1]['close'], 'score': 0, 'signals': [], 'direction': None, 'rsi': None, 'volume_ratio': None}
-        try:
-            price = df.iloc[-1]['close']
-
-            # 1. RSI
-            rsi_val = ta.momentum.RSIIndicator(df['close'], window=14).rsi().iloc[-1]
-            result['rsi'] = round(rsi_val, 1)
-            if rsi_val < 25: result['score'] += 4; result['signals'].append(f"📈 RSI تشبع بيعي شديد ({rsi_val:.0f})")
-            elif rsi_val < 30: result['score'] += 3; result['signals'].append(f"📈 RSI تشبع بيعي ({rsi_val:.0f})")
-            elif rsi_val > 75: result['score'] -= 4; result['signals'].append(f"📉 RSI تشبع شرائي شديد ({rsi_val:.0f})")
-            elif rsi_val > 70: result['score'] -= 3; result['signals'].append(f"📉 RSI تشبع شرائي ({rsi_val:.0f})")
-
-            # 2. MACD
-            macd_ind = ta.trend.MACD(df['close'])
-            macd_line, signal_line = macd_ind.macd(), macd_ind.macd_signal()
-            if macd_line.iloc[-1] > signal_line.iloc[-1] and macd_line.iloc[-2] <= signal_line.iloc[-2]:
-                result['score'] += 3; result['signals'].append("📈 MACD تقاطع صعودي ⚡")
-            elif macd_line.iloc[-1] < signal_line.iloc[-1] and macd_line.iloc[-2] >= signal_line.iloc[-2]:
-                result['score'] -= 3; result['signals'].append("📉 MACD تقاطع هبوطي")
-
-            # 3. EMA
-            ema9, ema21 = ta.trend.EMAIndicator(df['close'], window=9).ema_indicator(), ta.trend.EMAIndicator(df['close'], window=21).ema_indicator()
-            if ema9.iloc[-1] > ema21.iloc[-1] and ema9.iloc[-2] <= ema21.iloc[-2]:
-                result['score'] += 2; result['signals'].append("📈 EMA9 تقاطع فوق EMA21")
-            elif ema9.iloc[-1] < ema21.iloc[-1] and ema9.iloc[-2] >= ema21.iloc[-2]:
-                result['score'] -= 2; result['signals'].append("📉 EMA9 تقاطع تحت EMA21")
-
-            # 4. Bollinger Bands
-            bb = ta.volatility.BollingerBands(df['close'])
-            bb_lower = bb.bollinger_lband().iloc[-1]
-            if not pd.isna(bb_lower) and price <= bb_lower: 
-                result['score'] += 3; result['signals'].append("📈 لامس البولنجر السفلي (ارتداد)")
-
-            # 5. Volume
-            vol_avg, vol_current = df['volume'].rolling(20).mean().iloc[-1], df.iloc[-1]['volume']
-            vol_ratio = vol_current / vol_avg if vol_avg > 0 else 1
-            result['volume_ratio'] = round(vol_ratio, 1)
-            if vol_ratio > 3: result['score'] += 3; result['signals'].append(f"🔥 حجم ضخم! ({vol_ratio:.1f}x)")
-            elif vol_ratio > 2: result['score'] += 2; result['signals'].append(f"📊 حجم عالي ({vol_ratio:.1f}x)")
-
-            # 6. Stochastic
-            stoch = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'])
-            k, d = stoch.stoch().iloc[-1], stoch.stoch_signal().iloc[-1]
-            k_prev, d_prev = stoch.stoch().iloc[-2], stoch.stoch_signal().iloc[-2]
-            if k < 20 and d < 20 and k_prev < d_prev and k > d: result['score'] += 3; result['signals'].append("📈 Stochastic تقاطع صعودي بالقاع")
-
-            # 7. Price Change
-            if len(df) >= 25:
-                change_24h = ((df.iloc[-1]['close'] - df.iloc[-25]['close']) / df.iloc[-25]['close']) * 100
-                if -15 < change_24h < -5: result['score'] += 2; result['signals'].append(f"📉 هبوط {change_24h:.1f}% (فرصة!)")
-                elif change_24h > 20: result['score'] -= 2; result['signals'].append(f"⚠️ صعود حاد {change_24h:.1f}%")
-
-            # تحديد الاتجاه
-            if result['score'] >= self.MIN_SCORE_TO_TRADE: result['direction'] = 'BUY'
-            elif result['score'] <= -self.MIN_SCORE_TO_TRADE: result['direction'] = 'SELL'
-
-        except: return None
-        return result
+    async def scan_market(self):
+        logger.info("🔍 بدء المسح المتوازي للسوق...")
+        tasks = []
+        # فحص أبرز 50 عملة مثلاً، أو الكل إذا أردت
+        pairs_to_scan = [p['symbol'] for p in self.usdt_pairs[:50] if p['symbol'] not in self.active_trades]
+        
+        for sym in pairs_to_scan:
+            tasks.append(self.analyze_coin(sym))
+        
+        results = await asyncio.gather(*tasks)
+        signals = [r for r in results if r and abs(r['score']) >= self.MIN_SCORE_TO_TRADE]
+        
+        if signals:
+            signals.sort(key=lambda x: x['score'], reverse=True)
+            msg = "⚡ *فرص قوية مكتشفة!*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            for a in signals[:3]: 
+                dir_emoji = "🟢" if a['direction'] == 'BUY' else "🔴"
+                msg += f"{dir_emoji} `{a['symbol']}` | نقاط: *{a['score']}* | {a['signals'][0]}\n"
+            await self.tg(msg)
+            # تنفيذ أقوى إشارة
+            if self.TRADE_ENABLED and signals[0]['direction'] == 'BUY':
+                await self.execute_trade(signals[0])
 
     # ═══════════════════════════════════════════════════
-    #     حساب SL/TP المرن بناءً على ATR
+    #          تنفيذ الصفقات (Async)
     # ═══════════════════════════════════════════════════
-    def calculate_dynamic_sl_tp(self, symbol, entry_price):
-        df = self.get_klines(symbol, '1h', 30)
-        if df is None or len(df) < 15:
-            return entry_price * 0.97, entry_price * 1.06, entry_price * 1.03, 3.0
-
-        atr_indicator = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14)
-        atr = atr_indicator.average_true_range().iloc[-1]
-        if pd.isna(atr): # حماية إضافية
-            return entry_price * 0.97, entry_price * 1.06, entry_price * 1.03, 3.0
-            
-        atr_pct = (atr / entry_price) * 100
-
-        sl_distance = atr_pct * 1.5
-        tp1_distance = atr_pct * 3.0
-        trailing_activation = entry_price * (1 + (atr_pct * 1.5) / 100)
-        trailing_distance_pct = sl_distance
-
-        sl_price = entry_price * (1 - sl_distance / 100)
-        tp1_price = entry_price * (1 + tp1_distance / 100)
-
-        # حدود أمان
-        sl_price = max(sl_price, entry_price * 0.90)
-        sl_price = min(sl_price, entry_price * 0.98)
-        trailing_distance_pct = max(trailing_distance_pct, 1.5)
-
-        return round(sl_price, 6), round(tp1_price, 6), round(trailing_activation, 6), round(trailing_distance_pct, 2)
-
-    # ═══════════════════════════════════════════════════
-    #       التداول التلقائي (شراء وبيع Spot)
-    # ═══════════════════════════════════════════════════
-    def get_usdt_balance(self):
-        # تداول: نستخدم الرابط العادي
-        data = self._binance_request('GET', '/api/v3/account', signed=True)
-        if data:
-            for b in data.get('balances', []):
-                if b['asset'] == 'USDT': return float(b['free'])
-        return 0
-
-    def execute_trade(self, analysis):
-        symbol, direction, score, price = analysis['symbol'], analysis['direction'], analysis['score'], analysis['price']
-
-        if not self.TRADE_ENABLED or direction != 'BUY': return
-        if len(self.active_trades) >= self.MAX_OPEN_TRADES or symbol in self.active_trades: return
-
-        balance = self.get_usdt_balance()
-        trade_amount = balance * (self.RISK_PER_TRADE_PCT / 100)
+    async def execute_trade(self, analysis):
+        symbol = analysis['symbol']
+        price = analysis['price']
+        
+        balance_data = await self._binance_request('GET', '/api/v3/account', signed=True)
+        usdt_balance = 0
+        if balance_data:
+            for b in balance_data.get('balances', []):
+                if b['asset'] == 'USDT': usdt_balance = float(b['free'])
+        
+        trade_amount = usdt_balance * (self.RISK_PER_TRADE_PCT / 100)
         if trade_amount < self.MIN_TRADE_USDT: return
 
-        sl_price, tp_price, trailing_act, trailing_dist = self.calculate_dynamic_sl_tp(symbol, price)
+        # حساب ATR للوقف المرن
+        df = await self.get_klines(symbol, '15m', 30)
+        atr = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range().iloc[-1]
+        atr_pct = (atr / price) * 100
+        
+        sl_price = price * (1 - (atr_pct * 1.5) / 100)
+        tp_price = price * (1 + (atr_pct * 3.0) / 100)
+        trailing_dist = atr_pct * 1.5
 
-        self.tg(f"⏳ جاري تنفيذ شراء `{symbol}` (وقف مرن)...")
-        # تداول: نستخدم الرابط العادي
-        result = self._binance_request('POST', '/api/v3/order', {
+        result = await self._binance_request('POST', '/api/v3/order', {
             'symbol': symbol, 'side': 'BUY', 'type': 'MARKET', 'quoteOrderQty': round(trade_amount, 2)
         }, signed=True)
 
         if result and result.get('status') == 'FILLED':
             self.stats['trades_executed'] += 1
-            fills = result.get('fills', [])
-            fill_price = float(fills[0]['price']) if fills else price
-            fill_qty = float(fills[0]['qty']) if fills else 0
+            fill_price = float(result['fills'][0]['price'])
+            fill_qty = float(result['fills'][0]['qty'])
             
             self.active_trades[symbol] = {
-                'entry_price': fill_price, 'quantity': fill_qty, 'direction': 'BUY',
+                'entry_price': fill_price, 'quantity': fill_qty,
                 'stop_loss': sl_price, 'take_profit': tp_price,
-                'trailing_activation': trailing_act, 'trailing_distance_pct': trailing_dist,
+                'trailing_distance_pct': trailing_dist,
                 'highest_price': fill_price, 'trailing_active': False,
-                'entry_time': time.time(), 'score': score, 'max_profit_pct': 0
+                'entry_time': time.time()
             }
             self._save_active_trades()
-
-            msg = f"✅ *صفقة شراء منفذة (وقف مرن)!*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            msg += f"🪙 `{symbol}`\n💵 الدخول: `{fill_price:.6f}`\n💰 المبلغ: `${trade_amount:.2f}`\n"
-            msg += f"🛑 وقف الخسارة: `{sl_price:.6f}`\n🎯 هدف الربح: `{tp_price:.6f}`\n"
-            msg += f"🔄 تفعيل المتحرك عند: `{trailing_act:.6f}`\n📏 مسافة التتبع: `{trailing_dist}%`\n📈 نقاط: *{score}*"
-            self.tg(msg)
-        else:
-            self.tg(f"❌ فشل تنفيذ الشراء على `{symbol}` (تأكد من الرصيد أو قيود الـ API)")
+            await self.tg(f"✅ *شراء `{symbol}`*\n💵 الدخول: `{fill_price:.4f}`\n🛑 SL: `{sl_price:.4f}`\n🎯 TP: `{tp_price:.4f}`")
 
     # ═══════════════════════════════════════════════════
-    #    مراقبة الصفقات بالوقف المتحرك (Trailing)
+    #       وضع الفحص الرجعي (Backtesting)
     # ═══════════════════════════════════════════════════
-    def monitor_trades(self):
-        if not self.active_trades: return
+    async def run_backtest(self, symbol='BTCUSDT'):
+        logger.info(f"🧪 بدء وضع الفحص الرجعي على {symbol}...")
+        # جلب 1000 شمعة لـ 15 دقيقة (حوالي 10 أيام)
+        df_15m = await self.get_klines(symbol, '15m', 1000)
+        df_4h = await self.get_klines(symbol, '4h', 500)
+        
+        if df_15m is None: return
 
-        for symbol in list(self.active_trades.keys()):
-            trade = self.active_trades[symbol]
-            # استخدام is_data=True لجلب السعر (أسرع ولا يحظر)
-            ticker = self._binance_request('GET', '/api/v3/ticker/price', {'symbol': symbol}, is_data=True)
-            if not ticker: continue
+        wins, losses = 0, 0
+        for i in range(100, len(df_15m)):
+            current_candle = df_15m.iloc[i]
+            historical_df = df_15m.iloc[i-100:i]
             
-            current_price = float(ticker['price'])
-            entry_price = trade['entry_price']
-
-            if current_price > trade['highest_price']: trade['highest_price'] = current_price
-            current_profit_pct = ((current_price - entry_price) / entry_price) * 100
-            if current_profit_pct > trade['max_profit_pct']: trade['max_profit_pct'] = round(current_profit_pct, 2)
-
-            closed, close_reason = False, ""
-
-            # 1. فحص وقف الخسارة الأساسي
-            if current_price <= trade['stop_loss'] and not trade['trailing_active']:
-                closed, close_reason = True, "🛑 تم ضرب وقف الخسارة"
-
-            # 2. تفعيل الوقف المتحرك عند هدف الربح الأول
-            elif current_price >= trade['take_profit'] and not trade['trailing_active']:
-                trade['trailing_active'] = True
-                trade['stop_loss'] = entry_price * 1.005
-                msg = f"⚡ *تفعيل الوقف المتحرك! `{symbol}`*\n🎯 وصلنا الهدف الأول\n📈 الربح: {current_profit_pct:.1f}%\n🛑 الوقف الجديد: `{trade['stop_loss']:.6f}` (ضمان الربح)"
-                self.tg(msg)
-                self._save_active_trades()
-
-            # 3. تحريك الوقف المتحرك للأعلى دائماً
-            elif trade['trailing_active']:
-                new_sl = trade['highest_price'] * (1 - trade['trailing_distance_pct'] / 100)
-                if new_sl > trade['stop_loss']:
-                    trade['stop_loss'] = new_sl
-                    self._save_active_trades()
-
-                if current_price <= trade['stop_loss']:
-                    closed, close_reason = True, f"🔄 وقف متحرك حافظ على الأرباح!\n🏆 أقصى ربح وصل: {trade['max_profit_pct']:.1f}%"
-
-            # 4. انتهاء الوقت (72 ساعة)
-            elif time.time() - trade['entry_time'] > 259200 and current_profit_pct > -1:
-                closed, close_reason = True, f"⏰ انتهاء الوقت (ربح {current_profit_pct:.1f}%)"
-
-            # إغلاق الصفقة
-            if closed:
-                step_size = self.step_sizes_cache.get(symbol, 1)
-                qty = self.adjust_quantity(trade['quantity'], step_size)
-                # تداول: نستخدم الرابط العادي للبيع
-                result = self._binance_request('POST', '/api/v3/order', {
-                    'symbol': symbol, 'side': 'SELL', 'type': 'MARKET', 'quantity': qty
-                }, signed=True)
-                
-                fill_price = current_price
-                if result and result.get('fills'): fill_price = float(result['fills'][0]['price'])
-
-                pnl_usdt = (fill_price - entry_price) * trade['quantity']
-                pnl_pct = ((fill_price - entry_price) / entry_price) * 100
-                is_win = pnl_usdt > 0
-                if is_win: self.stats['wins'] += 1
-                else: self.stats['losses'] += 1
-
-                icon = "✅" if is_win else "❌"
-                msg = f"🏁 *إغلاق `{symbol}`*\n━━━━━━━━━━━━━━━━━━━━━━━━\n{close_reason}\n"
-                msg += f"💵 الدخول: `{entry_price:.6f}` | الإغلاق: `{fill_price:.6f}`\n"
-                msg += f"{icon} النتيجة: `{pnl_usdt:.2f} USDT ({pnl_pct:+.2f}%)`\n🏆 أقصى ربح وصل: *{trade['max_profit_pct']:.1f}%*\n📊 الإحصائيات: {self.stats['wins']}W / {self.stats['losses']}L"
-                self.tg(msg)
-
-                del self.active_trades[symbol]
-                self._save_active_trades()
+            # محاكاة الاتجاه والتحليل
+            ema50 = ta.trend.EMAIndicator(historical_df['close'], window=50).ema_indicator().iloc[-1]
+            is_bullish = historical_df.iloc[-1]['close'] > ema50
+            
+            # محاكاة الأوردر بلوك والمؤشرات
+            ob = self.detect_order_blocks(historical_df, is_bullish)
+            price = current_candle['close']
+            
+            score = 0
+            if ob and is_bullish and ob['type'] == 'bullish' and ob['low'] <= price <= ob['high']:
+                score += 5
+            
+            rsi = ta.momentum.RSIIndicator(historical_df['close'], window=14).rsi().iloc[-1]
+            if is_bullish and rsi < 35: score += 3
+            
+            if score >= self.MIN_SCORE_TO_TRADE:
+                # افتراض صفقة شراء، نرى ماذا يحدث في الـ 12 شمعة القادمة (3 ساعات)
+                future_prices = df_15m.iloc[i:i+12]['high']
+                if not future_prices.empty:
+                    tp = price * 1.03
+                    sl = price * 0.98
+                    hit_tp, hit_sl = False, False
+                    for fp in future_prices:
+                        if fp >= tp: hit_tp = True; break
+                        if fp <= sl: hit_sl = True; break
+                    if hit_tp: wins += 1
+                    elif hit_sl: losses += 1
+        
+        total = wins + losses
+        win_rate = (wins / total * 100) if total > 0 else 0
+        msg = f"🧪 *نتيجة الفحص الرجعي (Backtest)*\n🪙 العملة: {symbol}\n✅ رابحة: {wins}\n❌ خاسرة: {losses}\n📊 نسبة النجاح: {win_rate:.2f}%"
+        await self.tg(msg)
+        logger.info(msg)
 
     # ═══════════════════════════════════════════════════
-    #           وحدات البحث الخارجية المجانية
-    # ═══════════════════════════════════════════════════
-    def check_binance_announcements(self):
-        try:
-            r = requests.get("https://www.binance.com/bapi/composite/v1/public/cms/article/list/query", params={'type': 1, 'catalogId': 48, 'pageNo': 1, 'pageSize': 5}, timeout=10)
-            if r.status_code == 200:
-                for article in r.json().get('data', {}).get('articles', []):
-                    title = article.get('title', '').upper()
-                    if any(kw in title for kw in ['LIST', 'LISTING', 'LAUNCH', 'WILL LIST']):
-                        if article.get('releaseDate', 0) > (time.time() * 1000 - 3600000):
-                            self.tg(f"🚨 *إعلان إدراج جديد!*\n📢 {article.get('title')}\n⚡ عادة ترتفع بشدة!")
-        except: pass
-
-    def scan_coingecko_trending(self):
-        try:
-            r = requests.get("https://api.coingecko.com/api/v3/search/trending", timeout=10)
-            if r.status_code != 200: return
-            msg = "🔥 *عملات رائجة على CoinGecko*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            for i, c in enumerate(r.json().get('coins', [])[:5]):
-                item = c.get('item', {})
-                sym = item.get('symbol', '').upper()
-                on_binance = "✅" if f"{sym}USDT" in self.known_symbols else "❌"
-                msg += f"{i+1}. 🪙 *{item.get('name')}* (`{sym}`) على بينانس: {on_binance}\n"
-            self.tg(msg)
-        except: pass
-
-    def check_fear_greed(self):
-        try:
-            r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=10)
-            if r.status_code == 200:
-                fng = r.json().get('data', [{}])[0]
-                val, label = int(fng.get('value', 50)), fng.get('value_classification', 'Neutral')
-                emoji = {'Extreme Fear': '😱', 'Fear': '😨', 'Neutral': '😐', 'Greed': '😊', 'Extreme Greed': '🤑'}.get(label, '😐')
-                tip = "فرص شراء ممتازة!" if val < 25 else "حذر من التصحيح!" if val > 75 else ""
-                self.tg(f"{emoji} *مؤشر الخوف والطمع*: {val}/100 ({label})\n💡 {tip}")
-        except: pass
-
-    def detect_volume_spikes(self):
-        # استخدام is_data=True
-        data = self._binance_request('GET', '/api/v3/ticker/24hr', is_data=True)
-        if not data: return
-        spikes = []
-        for t in data:
-            sym, vol, chg = t.get('symbol', ''), float(t.get('quoteVolume', 0)), float(t.get('priceChangePercent', 0))
-            if sym.endswith('USDT') and vol > 5000000 and 2 < chg < 20: spikes.append({'symbol': sym, 'vol': vol, 'chg': chg})
-        if spikes:
-            spikes.sort(key=lambda x: x['vol'], reverse=True)
-            msg = "📊 *ارتفاعات حجم (ضخ أموال)*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            for i, s in enumerate(spikes[:5]): msg += f"{i+1}. `{s['symbol']}` | 💧 ${s['vol']/1e6:.1f}M | 📈 {s['chg']:+.1f}%\n"
-            self.tg(msg)
-
-    # ═══════════════════════════════════════════════════
-    #       المسح السريع والشامل للسوق
-    # ═══════════════════════════════════════════════════
-    def quick_scan(self):
-        priority = ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT', 'LINK', 'UNI', 'ATOM', 'LTC', 'NEAR', 'APT', 'ARB', 'OP', 'SUI', 'SEI', 'TIA', 'INJ', 'FET', 'WLD', 'PEPE', 'SHIB', 'TON']
-        found = []
-        for coin in priority:
-            sym = f"{coin}USDT"
-            if sym in self.known_symbols and sym not in self.active_trades:
-                a = self.analyze_coin(sym)
-                if a and a['score'] >= self.MIN_SCORE_TO_TRADE: found.append(a)
-                time.sleep(0.3)
-        if found:
-            found.sort(key=lambda x: x['score'], reverse=True)
-            msg = "⚡ *فحص سريع — فرص قوية!*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            for i, a in enumerate(found[:3]): msg += f"🟢 `{a['symbol']}` | نقاط: *{a['score']}* | ${a['price']:.4f}\n"
-            self.tg(msg)
-            self.execute_trade(found[0])
-
-    # ═══════════════════════════════════════════════════
-    #       حفظ واسترجاع الصفقات (JSON)
+    #          حفظ واسترجاع الصفقات
     # ═══════════════════════════════════════════════════
     def _save_active_trades(self):
         try:
             with open('active_trades.json', 'w') as f: json.dump(self.active_trades, f)
-        except: pass
+        except Exception as e:
+            logger.error(f"فشل حفظ الصفقات: {e}")
 
     def _load_active_trades(self):
         try:
             if os.path.exists('active_trades.json'):
                 with open('active_trades.json', 'r') as f: self.active_trades = json.load(f)
-                if self.active_trades: self.tg(f"📂 تم استرجاع {len(self.active_trades)} صفقة مفتوحة")
-        except: self.active_trades = {}
+        except Exception as e:
+            logger.error(f"فشل تحميل الصفقات: {e}")
+            self.active_trades = {}
 
     # ═══════════════════════════════════════════════════
-    #        حلقة التشغيل الرئيسية (القلب النابض)
+    #          القلب النابض (Main Async Loop)
     # ═══════════════════════════════════════════════════
-    def run(self):
-        mode_msg = "⚔️ تداول تلقائي" if self.TRADE_ENABLED else "👁️ مراقبة فقط"
-        self.tg(f"🤖 *القناص الأسطوري بدأ العمل!* ({mode_msg})\n⏰ المسح السريع: 15 د | المصادر: 30 د | الشامل: 3 س\n👀 المراقبة: كل دقيقة")
+    async def main_loop(self):
+        self.session = aiohttp.ClientSession()
+        await self.load_market_data()
+        self._load_active_trades()
         
-        while True:
-            try:
-                now = time.time()
+        await self.tg("🔥 *القناص الأسطوري V3.0 بدأ العمل!*\n🚀 يعمل بـ WebSockets + Asyncio")
 
-                # كل دقيقة: مراقبة الصفقات المفتوحة
-                self.monitor_trades()
+        if self.BACKTEST_MODE:
+            await self.run_backtest('BTCUSDT')
+            await self.session.close()
+            return
 
-                # كل 5 دقائق: إعلانات بينانس
-                if now - self.last_announcement_check > 300:
-                    self.check_binance_announcements()
-                    self.last_announcement_check = now
+        # تشغيل الـ WebSockets في الخلفية
+        asyncio.create_task(self.websocket_listener())
 
-                # كل 15 دقيقة: فحص سريع + حجم
-                if now - self.last_volume_scan > 900:
-                    self.quick_scan()
-                    self.detect_volume_spikes()
-                    self.last_volume_scan = now
+        scan_counter = 0
+        try:
+            while True:
+                scan_counter += 1
+                # مراقبة الصفقات كل ثانية بناءً على WebSockets
+                await self.monitor_trades()
+                
+                # مسح السوق كل 15 دقيقة (900 ثانية)
+                if scan_counter % 900 == 0:
+                    await self.scan_market()
+                
+                await asyncio.sleep(1) # سرعة فائقة بدل دقيقة
+        except Exception as e:
+            logger.critical(f"انهيار النظام الرئيسي: {e}")
+        finally:
+            await self.session.close()
 
-                # كل 30 دقيقة: مصادر خارجية
-                if now - self.last_coingecko_check > 1800:
-                    self.scan_coingecko_trending()
-                    self.check_fear_greed()
-                    self.last_coingecko_check = now
-
-                # كل 3 ساعات: تحديث الأزواج
-                if now - self.last_full_scan > 10800:
-                    self._load_usdt_pairs()
-                    self.last_full_scan = now
-
-                time.sleep(60)
-
-            except KeyboardInterrupt:
-                self.tg("⛔ تم إيقاف القناص الأسطوري يدوياً"); break
-            except Exception as e:
-                print(f"Loop error: {e}")
-                time.sleep(60)
+    def start(self):
+        asyncio.run(self.main_loop())
 
 if __name__ == "__main__":
-    bot = LegendarySniperBot()
-    bot.run()
+    bot = LegendarySniperBotV3()
+    bot.start()
