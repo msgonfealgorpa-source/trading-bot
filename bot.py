@@ -195,12 +195,20 @@ class LegendarySniperBotV5:
         self.smc = SMCEngine()
         self.session = None
         self.active_trades = {}
-        self.step_sizes_cache = {} # 2- إعادة الجلب والفلترة
+        self.step_sizes_cache = {} 
         self.live_prices = {} 
         self.live_klines = {} 
         
-        self.data_url = "https://data-api.binance.vision"
-        self.trade_url = "https://api.binance.com"
+        # ⬇️ تعديل: دعم الحساب التجريبي والحقيقي
+        self.mode = os.environ.get('BINANCE_MODE', 'real').lower()
+        if self.mode == 'test':
+            self.data_url = "https://testnet.binance.vision/api"
+            self.trade_url = "https://testnet.binance.vision/api"
+            logger.info("🧪 البوت يعمل في الوضع التجريبي (Testnet)")
+        else:
+            self.data_url = "https://data-api.binance.vision"
+            self.trade_url = "https://api.binance.com"
+            logger.info("💰 البوت يعمل في الوضع الحقيقي (Real Account)")
         self.priority = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'AVAX', 'LINK', 'SUI', 'INJ']
         
         self.last_scan_time = 0 # 4- إصلاح Scan Timer
@@ -279,7 +287,11 @@ class LegendarySniperBotV5:
             streams.append(f"{sym}@bookTicker")
             streams.append(f"{sym}@kline_15m")
         
-        ws_url = f"wss://stream.binance.com:9443/stream?streams={'/'.join(streams)}"
+    # ⬇️ تعديل: اختيار رابط WebSocket بناءً على الوضع
+        if self.mode == 'test':
+            ws_url = f"wss://testnet.binance.vision/stream?streams={'/'.join(streams)}"
+        else:
+            ws_url = f"wss://stream.binance.com:9443/stream?streams={'/'.join(streams)}"
         
         while True:
             try:
