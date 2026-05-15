@@ -1,4 +1,4 @@
 pandas
 ta
-requests
-numpy
+aiohttp
+websockets
