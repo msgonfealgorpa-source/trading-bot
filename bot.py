@@ -86,11 +86,14 @@ class LegendarySniperBotV3:
         logger.info(f"🔥 القناص الأسطوري V3.0 بدأ التشغيل — الوضع: {mode}")
 
     # ═══════════════════════════════════════════════════
-    #          وحدة تيليجرام (Async)
+    #          وحدة تيليجرام (Async) - مصلحة
     # ═══════════════════════════════════════════════════
     async def tg(self, msg):
         try:
+            # حماية: إذا كانت الجلسة لم تُنشأ بعد، لا تحاول الإرسال لتجنب الانهيار
+            if not self.session: return
             if not self.tg_token or not self.tg_chat: return
+            
             if len(msg) > 4000:
                 for i in range(0, len(msg), 4000):
                     await self.session.post(f"https://api.telegram.org/bot{self.tg_token}/sendMessage",
@@ -212,7 +215,9 @@ class LegendarySniperBotV3:
             df_4h = await self.get_klines(symbol, '4h', 50)
             if df_4h is None or len(df_4h) < 50: return None
             
-            ema50_4h = ta.trend.EMAIndicator(df_4h['close'], window=50).ema_indicator().iloc[-1]
+            ema50_calc = ta.trend.EMAIndicator(df_4h['close'], window=50).ema_indicator()
+            if ema50_calc.isna().iloc[-1]: return None
+            ema50_4h = ema50_calc.iloc[-1]
             is_bullish_trend = df_4h.iloc[-1]['close'] > ema50_4h
 
             # 2. إطار 15 دقيقة لنقطة الدخول الدقيقة والمؤشرات
