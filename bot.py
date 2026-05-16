@@ -1,15 +1,12 @@
 """
 ═══════════════════════════════════════════════════════════════════════
-  🔥 القناص الأسطوري V6.1 — Legendary Sniper (Hotfix) 🔥
+  🔥 القناص الأسطوري V6.2 — Legendary Sniper (Strict Capital Protection) 🔥
 ═══════════════════════════════════════════════════════════════════════
-  إصلاحات V6.1:
-  ✅ تنسيق ذكي للسعر (يعمل مع SHIB, PEPE, إلخ)
-  ✅ إصلاح عرض النسبة المئوية (+-1.3% ← -1.3%)
-  ✅ DexScreener: endpoint محسّن (بدون سخام)
-  ✅ فلتر مسبق مُرخى (18 ← 150+ مرشح)
-  ✅ معالجة Testnet + إعادة توجيه تلقائية
-  ✅ إشارات SMC تظهر بشكل كامل
-  ✅ فلتر HTF مرن (تقليل نقاط بدلاً من رفض كامل)
+  تحديثات V6.2:
+  ✅ فلتر HTF صارم: رفض قاطع لأي صفقة تعاكس فريم الساعة (حماية رأس المال)
+  ✅ Pre-filter صارم: سيولة عالية فقط (500K$ حجم، 200+ صفقة، أفضل 80 عملة)
+  ✅ تثبيت MIN_SCORE_TO_TRADE = 7 كحد أدنى إجباري
+  ✅保留了 V6.1 Fixes: تنسيق الأسعار، DexScreener، معالجة Testnet
 ═══════════════════════════════════════════════════════════════════════
 """
 
@@ -266,7 +263,7 @@ class RiskManager:
 
 
 # ══════════════════════════════════════════════════════════════════════
-#                  🔥 القناص الأسطوري V6.1 🔥
+#                  🔥 القناص الأسطوري V6.2 🔥
 # ══════════════════════════════════════════════════════════════════════
 class LegendarySniperBotV6:
     def __init__(self):
@@ -279,7 +276,10 @@ class LegendarySniperBotV6:
         self.RISK_PER_TRADE_PCT = float(os.environ.get('RISK_PCT', '1.5'))
         self.STOP_LOSS_PCT = float(os.environ.get('SL_PCT', '3'))
         self.TAKE_PROFIT_PCT = float(os.environ.get('TP_PCT', '6'))
-        self.MIN_SCORE_TO_TRADE = int(os.environ.get('MIN_SCORE', '7'))
+        
+        # ═══ تعديل 3: تثبيت النقاط كحد أدنى لحماية رأس المال ═══
+        self.MIN_SCORE_TO_TRADE = 7  # مقفل على 7 كحد أدنى إجباري لحماية رأس المال
+        
         self.MAX_OPEN_TRADES = int(os.environ.get('MAX_TRADES', '3'))
         self.MIN_TRADE_USDT = float(os.environ.get('MIN_TRADE_USDT', '10'))
 
@@ -289,7 +289,6 @@ class LegendarySniperBotV6:
         self.weight_tracker = WeightTracker(max_per_minute=2400)
         self.session = None
 
-        # ─── الوضع: حقيقي دائماً إلا إذا حددت test ───
         self.mode = os.environ.get('BINANCE_MODE', 'real').lower()
         self.data_url = "https://api.binance.com"
         self.trade_url = "https://api.binance.com"
@@ -334,7 +333,6 @@ class LegendarySniperBotV6:
 
     # ═════════════════════ تنسيق ذكي ═════════════════════
     def fmt_price(self, price):
-        """تنسيق ذكي للسعر — يعمل مع SHIB و PEPE"""
         if price is None or price == 0: return "$0"
         if price < 0.00001: return f"${price:.10f}"
         elif price < 0.0001: return f"${price:.8f}"
@@ -346,7 +344,6 @@ class LegendarySniperBotV6:
         else: return f"${price:,.0f}"
 
     def fmt_pct(self, pct):
-        """تنسيق ذكي للنسبة — إصلاح +-1.3%"""
         if pct is None: return "0.0%"
         if pct > 0: return f"+{pct:.1f}%"
         elif pct < 0: return f"{pct:.1f}%"
@@ -373,13 +370,12 @@ class LegendarySniperBotV6:
 
     # ═════════════════════ بينانس API (محصّن) ═════════════════════
     async def _switch_to_real(self):
-        """التحول التلقائي من Testnet إلى Real عند فشل الاتصال"""
         if not self._testnet_failed:
             self._testnet_failed = True
             self.data_url = "https://api.binance.com"
             self.trade_url = "https://api.binance.com"
             logger.warning("⚠️ Testnet غير متاح! تم التحول تلقائياً للسيرفر الحقيقي (للقراءة فقط)")
-            await self.tg("⚠️ *Testnet غير متاح!*\nتم التحول تلقائياً للسيرفر الحقيقي (قراءة فقط)\nالتداول يحتاج مفاتيح API حقيقية")
+            await self.tg("⚠️ *Testnet غير متاح!*\nتم التحول تلقائياً للسيرفر الحقيقي (قراءة فقط)")
 
     async def _binance_request(self, method, endpoint, params=None,
                                signed=False, is_trade_endpoint=False,
@@ -416,16 +412,14 @@ class LegendarySniperBotV6:
 
             except (aiohttp.ClientConnectorError, aiohttp.ClientSSLError) as e:
                 err_str = str(e)
-                # إذا كان خطأ اتصال بـ Testnet → تحول تلقائي
                 if 'testnet' in err_str.lower() or 'name or service not known' in err_str.lower():
                     if self.mode == 'test' and not self._testnet_failed:
                         await self._switch_to_real()
-                        continue  # إعادة المحاولة بالسيرفر الحقيقي
+                        continue
 
                 if attempt < retries - 1:
                     await asyncio.sleep(2 ** attempt)
                 else:
-                    # لا نرسل أخطاء الاتصال كحرجة لتيليجرام
                     logger.warning(f"خطأ اتصال بينانس: {err_str[:100]}")
                     return None
 
@@ -596,7 +590,6 @@ class LegendarySniperBotV6:
         if symbol not in self.live_klines or len(self.live_klines[symbol]) < 50:
             return None
         df = pd.DataFrame(self.live_klines[symbol])
-        # تحويل الأعمدة لضمان النوع الصحيح
         for col in ['open','high','low','close','volume']:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -811,19 +804,9 @@ class LegendarySniperBotV6:
                 elif sig_type == 'CHoCH_Bear':
                     result['signals_smc'].append("📉 CHoCH هبوطي (تغيير اتجاه) ⚡")
 
-            # ─── فلتر HTF مرن: تقليل نقاط بدلاً من رفض كامل ───
-            if result['direction'] == 'BUY' and htf_trend == 'bear':
-                result['score'] -= 3
-                result['signals_smc'].append("⚠️ عكس اتجاه الساعة (-3 نقاط)")
-            elif result['direction'] == 'SELL' and htf_trend == 'bull':
-                result['score'] -= 3
-                result['signals_smc'].append("⚠️ عكس اتجاه الساعة (-3 نقاط)")
-            elif result['direction'] == 'BUY' and htf_trend == 'bull':
-                result['score'] += 2
-                result['signals_smc'].append("✅ توافق مع اتجاه الساعة (+2 نقاط)")
-            elif result['direction'] == 'SELL' and htf_trend == 'bear':
-                result['score'] -= 2
-                result['signals_smc'].append("✅ توافق مع اتجاه الساعة (+2 نقاط)")
+            # ═══ تعديل 1: فلتر HTF صارم — رفض قاطع لحماية رأس المال ═══
+            if result['direction'] == 'BUY' and htf_trend != 'bull': return None
+            if result['direction'] == 'SELL' and htf_trend != 'bear': return None
 
             # FVG
             for fvg in fvgs[-5:]:
@@ -943,7 +926,6 @@ class LegendarySniperBotV6:
                                     self.hot_coins.add(base)
                     await self.db.add_seen_announcement(aid, title)
 
-            # كشف المحذوفة
             deleted = seen_ids - current_ids
             if deleted:
                 for did in list(deleted)[:5]:
@@ -1036,7 +1018,6 @@ class LegendarySniperBotV6:
             if binance_gainers:
                 msg = "🚀 *أكثر العملات ارتفاعاً (على بينانس)*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 for i, g in enumerate(binance_gainers[:7]):
-                    # ═══ إصلاح: تنسيق النسبة والسعر ═══
                     msg += (f"{i+1}. 🪙 *{g['name']}* (`{g['symbol']}`)\n"
                            f"   💰 {self.fmt_price(g['price'])} | 📈 {self.fmt_pct(g['change'])}\n\n")
                 await self.tg(msg)
@@ -1049,16 +1030,10 @@ class LegendarySniperBotV6:
 
     # ═════════════════════ DexScreener (محسّن) ═════════════════════
     async def scan_dexscreener_hot(self):
-        """
-        إصلاح: استخدام endpoint محسّن بدل البحث عن "trending"
-        الذي يعيد عملات مزيفة اسمها Trending
-        """
         try:
-            # الطريقة 1: Token Boosts (عملات يتم ترويجها)
             url = "https://api.dexscreener.com/token-boosts/top/v1"
             async with self.session.get(url, timeout=10) as r:
                 if r.status != 200:
-                    # محاولة بديلة
                     url2 = "https://api.dexscreener.com/token-profiles/latest/v1"
                     async with self.session.get(url2, timeout=10) as r2:
                         if r2.status != 200: return []
@@ -1068,21 +1043,15 @@ class LegendarySniperBotV6:
 
             if not data or not isinstance(data, list): return []
 
-            # تصفية: فقط العملات المتاحة على بينانس
             binance_tokens = []
             other_tokens = []
 
             for token in data[:30]:
                 symbol = token.get('symbol', '').upper()
                 name = token.get('name', '')
-                address = token.get('tokenAddress', '')
                 chain = token.get('chainId', '')
                 price_usd = token.get('priceUsd', '0')
-                # Token boosts لا تحتوي دائماً على priceChange
                 change = 0
-
-                # محاولة جلب تفاصيل إضافية
-                description = token.get('description', '')
 
                 on_binance = f"{symbol}USDT" in self.known_symbols
 
@@ -1100,7 +1069,6 @@ class LegendarySniperBotV6:
                         'chain': chain, 'on_binance': False
                     })
 
-            # بناء الرسالة
             all_tokens = binance_tokens[:5] + other_tokens[:3]
             if not all_tokens: return []
 
@@ -1207,7 +1175,6 @@ class LegendarySniperBotV6:
     async def smart_scan_with_external_filter(self):
         binance_targets = set()
 
-        # 1. CoinGecko Trending
         try:
             url = "https://api.coingecko.com/api/v3/search/trending"
             async with self.session.get(url, timeout=10) as r:
@@ -1223,7 +1190,6 @@ class LegendarySniperBotV6:
 
         await asyncio.sleep(1)
 
-        # 2. CoinGecko Gainers
         try:
             url = "https://api.coingecko.com/api/v3/coins/markets"
             params = {'vs_currency': 'usd', 'order': 'price_change_percentage_24h_desc',
@@ -1242,7 +1208,6 @@ class LegendarySniperBotV6:
 
         await asyncio.sleep(1)
 
-        # 3. DexScreener
         try:
             url = "https://api.dexscreener.com/token-boosts/top/v1"
             async with self.session.get(url, timeout=10) as r:
@@ -1257,17 +1222,14 @@ class LegendarySniperBotV6:
         except Exception:
             pass
 
-        # 4. ارتفاعات الحجم
         for spike in self.volume_spikes[:10]:
             binance_targets.add(spike['symbol'])
 
-        # 5. العملات الساخنة
         for coin in self.hot_coins:
             sym = f"{coin}USDT"
             if sym in self.known_symbols:
                 binance_targets.add(sym)
 
-        # 6. العملات ذات الأولوية
         for coin in self.priority_coins:
             sym = f"{coin}USDT"
             if sym in self.known_symbols:
@@ -1326,7 +1288,6 @@ class LegendarySniperBotV6:
                f"📊 عدد الأزواج: {len(self.all_usdt_pairs)}\n━━━━━━━━━━━━━━━━━━━━━━━━")
         await self.tg(msg)
 
-        # ═══ الخطوة 1: Pre-filter بطلب واحد ═══
         all_tickers = await self._binance_request('GET', '/api/v3/ticker/24hr', weight=40)
         if not all_tickers:
             await self.tg("❌ فشل تحميل بيانات السوق")
@@ -1337,15 +1298,13 @@ class LegendarySniperBotV6:
             symbol = ticker.get('symbol', '')
             if not symbol.endswith('USDT'): continue
             if symbol in self.active_trades: continue
-            # ═══ إصلاح: لا نشترط وجود step_size هنا ═══
-            # (سنشترطه عند التنفيذ فقط)
 
             quote_vol = float(ticker.get('quoteVolume', 0))
             price_change = float(ticker.get('priceChangePercent', 0))
             trades = int(ticker.get('count', 0))
 
-            # ═══ إصلاح: تخفيف الفلتر ═══
-            if quote_vol > 100000 and -30 < price_change < 30 and trades > 50:
+            # ═══ تعديل 2: تشديد الفلتر المسبق لسيولة عالية فقط ═══
+            if quote_vol > 500000 and -30 < price_change < 30 and trades > 200:
                 interest_score = 0
                 base = symbol.replace('USDT', '')
 
@@ -1371,12 +1330,11 @@ class LegendarySniperBotV6:
 
         candidates.sort(key=lambda x: x['interest'], reverse=True)
 
-        # ═══ إصلاح: زيادة عدد المرشحين ═══
-        top_candidates = candidates[:150]
+        # ═══ تعديل 2: تضييق النطاق لأفضل 80 عملة فقط ═══
+        top_candidates = candidates[:80]
 
         logger.info(f"📊 Pre-filter: {len(candidates)} مرشح ← تحليل أفضل {len(top_candidates)}")
 
-        # ═══ الخطوة 2: تحليل تدريجي ═══
         CHUNK_SIZE = 10
         results = []
         scanned = 0
@@ -1387,7 +1345,6 @@ class LegendarySniperBotV6:
             for candidate in chunk:
                 symbol = candidate['symbol']
 
-                # ═══ إصلاح: التحقق من step_size هنا فقط ═══
                 if symbol not in self.step_sizes_cache:
                     scanned += 1
                     continue
@@ -1414,7 +1371,6 @@ class LegendarySniperBotV6:
 
         self.stats['total_scans'] += scanned
 
-        # ═══ الخطوة 3: ترتيب وتنفيذ ═══
         results.sort(key=lambda x: abs(x['score']), reverse=True)
 
         buys = [a for a in results if a['direction'] == 'BUY'][:5]
@@ -1441,7 +1397,6 @@ class LegendarySniperBotV6:
                 msg += f"{i+1}. 🪙 `{a['symbol']}` | نقاط: *{a['score']}* | {self.fmt_price(a['price'])}\n"
             await self.tg(msg)
 
-        # ═══ تقرير الختام ═══
         total = self.stats['wins'] + self.stats['losses']
         win_rate = (self.stats['wins'] / total * 100) if total > 0 else 0
         weight_used = self.weight_tracker.current
@@ -1703,22 +1658,22 @@ class LegendarySniperBotV6:
         self.active_trades = await self.db.load_active_trades()
         await self.sync_with_binance()
 
-        # تشغيل WebSocket في الخلفية
         asyncio.create_task(self.ws_manager())
         await asyncio.sleep(10)
 
-        # رسالة التشغيل
         mode_str = "🧪 تجريبي (Testnet)" if self.mode == 'test' and not self._testnet_failed else "💰 حقيقي (Real)"
         mode_trade = "⚔️ تداول تلقائي" if self.TRADE_ENABLED else "👁️ مراقبة فقط"
 
-        msg = ("🔥 *القناص الأسطوري V6.1 — بدأ العمل!*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        msg = ("🔥 *القناص الأسطوري V6.2 — بدأ العمل!*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
                f"📡 الوضع: {mode_trade}\n"
                f"🌐 السيرفر: {mode_str}\n"
                f"💰 المخاطرة/صفقة: {self.RISK_PER_TRADE_PCT}%\n"
-               f"📊 حد النقاط: {self.MIN_SCORE_TO_TRADE}\n"
+               f"📊 حد النقاط: {self.MIN_SCORE_TO_TRADE} (مقفل لحماية رأس المال)\n"
                f"📂 أقصى صفقات: {self.MAX_OPEN_TRADES}\n"
                f"🪙 أزواج محملة: {len(self.all_usdt_pairs)}\n"
                f"📏 أحجام خطوة: {len(self.step_sizes_cache)}\n"
+               "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+               "🛡️ فلاتر صارمة: HTF صارم + سيولة عالية + 7 نقاط حد أدنى\n"
                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
                "⏰ المسح الشامل: كل ساعتين\n"
                "🎯 المسح الذكي: كل 30 دقيقة\n"
@@ -1737,20 +1692,16 @@ class LegendarySniperBotV6:
                 try:
                     now = time.time()
 
-                    # ═══ كل 30 ثانية: مراقبة الصفقات ═══
                     await self.monitor_trades()
 
-                    # ═══ كل دقيقتين: إعلانات بينانس ═══
                     if now - self.timers['announcement'] > 120:
                         await self.check_binance_announcements()
                         self.timers['announcement'] = now
 
-                    # ═══ كل 15 دقيقة: فحص سريع ═══
                     if now - self.timers['quick_scan'] > 900:
                         await self.quick_scan()
                         self.timers['quick_scan'] = now
 
-                    # ═══ كل 30 دقيقة: مصادر خارجية + مسح ذكي + حجم ═══
                     if now - self.timers['coingecko'] > 1800:
                         await self.scan_coingecko_trending()
                         await asyncio.sleep(2)
@@ -1765,19 +1716,16 @@ class LegendarySniperBotV6:
                         await self.smart_scan_with_external_filter()
                         self.timers['hot_scan'] = now
 
-                    # ═══ كل ساعة: مؤشر الخوف ═══
                     if now - self.timers['fear_greed'] > 3600:
                         await self.check_fear_greed()
                         self.timers['fear_greed'] = now
 
-                    # ═══ كل ساعتين: مسح شامل ═══
                     if now - self.timers['full_scan'] > 7200:
                         await self.load_market_data()
                         self.timers['reload_market'] = now
                         await self.full_market_scan()
                         self.timers['full_scan'] = now
 
-                    # ═══ كل 4 ساعات: مزامنة ═══
                     if now - self.timers.get('sync', 0) > 14400:
                         await self.sync_with_binance()
                         self.timers['sync'] = now
