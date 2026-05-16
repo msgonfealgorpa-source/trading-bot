@@ -1651,23 +1651,24 @@ class LegendarySniperBotV6:
 
     # ═════════════════════ اللوب الرئيسي ═════════════════════
     async def main_loop(self):
-        self.session = aiohttp.ClientSession()
-        await self.db.init_db()
-        await self.load_market_data()
+    self.session = aiohttp.ClientSession()
+    await self.db.init_db()
+    await self.load_market_data()
 
-        self.active_trades = await self.db.load_active_trades()
-        await self.sync_with_binance()
+    self.active_trades = await self.db.load_active_trades()
+    await self.sync_with_binance()
 
-        asyncio.create_task(self.ws_manager())
-        await asyncio.sleep(10).
-      
-if self.mode == 'test' and not self._testnet_failed:
-            mode_str = "🧪 تجريبي (Testnet)"
-        elif self.mode == 'test' and self._testnet_failed:
-            mode_str = "💰 حقيقي (Real) — Testnet كان معطّلاً"
-        else:
-            mode_str = "💰 حقيقي (Real)"
-        mode_trade = "⚔️ تداول تلقائي" if self.TRADE_ENABLED else "👁️ مراقبة فقط"
+    asyncio.create_task(self.ws_manager())
+    await asyncio.sleep(10)
+
+    if self.mode == 'test' and not self._testnet_failed:
+        mode_str = "🧪 تجريبي (Testnet)"
+    elif self.mode == 'test' and self._testnet_failed:
+        mode_str = "💰 حقيقي (Real) - Testnet كان معطل"
+    else:
+        mode_str = "💰 حقيقي (Real)"
+
+    mode_trade = "❌ تداول تلقائي" if self.TRADE_ENABLED else "👁️ فقط"
 
         msg = ("🔥 *القناص الأسطوري V6.2 — بدأ العمل!*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
                f"📡 الوضع: {mode_trade}\n"
