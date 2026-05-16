@@ -511,7 +511,7 @@ class LegendarySniperBotV6:
             streams.append(f"{sym}@kline_15m")
 if self.mode == 'test' and not self._testnet_failed:
     ws_url = f"wss://stream.binance.com:9443/stream?streams={'/'.join(streams)}"
-else:
+
     ws_url = f"wss://stream.binance.com:9443/stream?streams={'/'.join(streams)}"        else:
             ws_url = f"wss://stream.binance.com:9443/stream?streams={'/'.join(streams)}"
 
