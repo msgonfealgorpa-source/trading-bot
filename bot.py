@@ -1,4 +1,6 @@
-""" ═══════════════════════════════════════════════════════════════ 🔥 القناص الأسطوري V5.1 — النسخة المؤسسية (Cumulative Stable Patch) 🔥 ═══════════════════════════════════════════════════════════════ """
+""" ═══════════════════════════════════════════════════════════════ 
+🔥 القناص الأسطوري V5.1 — النسخة المؤسسية (Cumulative Stable Patch) 🔥 
+════════════════════════════════════════════════════════════════ """
 
 import asyncio, aiohttp, json, math, os, sys, time, logging, requests, sqlite3
 import pandas as pd
@@ -199,19 +201,18 @@ class LegendarySniperBotV5:
         self.live_prices = {} 
         self.live_klines = {} 
         
-        # ⬇️ تعديل: دعم الحساب التجريبي والحقيقي
         self.mode = os.environ.get('BINANCE_MODE', 'real').lower()
         if self.mode == 'test':
             self.data_url = "https://testnet.binance.vision"
-            self.trade_url = "https://testnet.binanceapi.com"  # الرابط المحدث والأكثر استقراراً لـ API التجريبي
+            self.trade_url = "https://testnet.binanceapi.com"  
             logger.info("🧪 البوت يعمل في الوضع التجريبي (Testnet)")
         else:
             self.data_url = "https://data-api.binance.vision"
             self.trade_url = "https://api.binance.com"
             logger.info("💰 البوت يعمل في الوضع الحقيقي (Real Account)")
-        self.priority = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'AVAX', 'LINK', 'SUI', 'INJ']
         
-        self.last_scan_time = 0 # 4- إصلاح Scan Timer
+        self.priority = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'AVAX', 'LINK', 'SUI', 'INJ']
+        self.last_scan_time = 0 
 
     async def tg(self, msg):
         try:
@@ -229,6 +230,8 @@ class LegendarySniperBotV5:
                 req_params = params.copy() if params else {}
                 if signed:
                     if not self.binance_api_key: return None
+                    # 🔴 إصلاح 2: إضافة تأخير بسيط لمنع تداخل Timestamps و recvWindow
+                    await asyncio.sleep(0.05)
                     req_params = self._sign(req_params)
                     headers = {'X-MBX-APIKEY': self.binance_api_key}
                 async with self.session.request(method, url, params=req_params, headers=headers, timeout=10) as r:
@@ -252,7 +255,6 @@ class LegendarySniperBotV5:
                 if b['asset'] == 'USDT': return float(b['free'])
         return 0.0
 
-    # 2- إعادة خطوة الحجم (Step Size)
     async def load_market_data(self):
         data = await self._binance_request('GET', '/api/v3/exchangeInfo')
         if not data: return
@@ -266,7 +268,6 @@ class LegendarySniperBotV5:
         precision = int(round(-math.log10(step_size))) if step_size < 1 else 0
         return math.floor(qty * (10 ** precision)) / (10 ** precision)
 
-    # 6- Persistent Storage Reconciliation
     async def sync_with_binance(self):
         open_orders = await self._binance_request('GET', '/api/v3/openOrders', signed=True, is_trade_endpoint=True)
         if open_orders is None: return
@@ -274,12 +275,14 @@ class LegendarySniperBotV5:
         active_symbols = set(self.active_trades.keys())
         binance_symbols = {o['symbol'] for o in open_orders if o['type'] == 'LIMIT' or o['type'] == 'STOP_MARKET'}
         
-        # إذا كان لدينا صفقة في DB لكن ليس في بينانس (تم إغلاقها بوقف وأغفلناها)
+        # 🔴 إصلاح 3: حذف الصفقات الميتة فعلياً من الذاكرة وقاعدة البيانات لفتح المجال لصفقات جديدة
         for sym in active_symbols - binance_symbols:
-            # نتحقق إذا كنا نملك العملة فعلاً
-            logger.warning(f"⚠️ {sym} في قاعدة البيانات لكن غير موجود كأمر مفتوح. سيتم حذفه لاحقاً إن لزم.")
+            logger.warning(f"⚠️ {sym} في قاعدة البيانات لكن غير موجود في بينانس. يتم الحذف الفعلي...")
+            await self.db.remove_trade(sym)
+            if sym in self.active_trades:
+                del self.active_trades[sym]
 
-        # ═════════════════════ إدارة الاتصال اللحظي (WebSocket + REST Fallback) ═════════════════════
+    # ═════════════════════ إدارة الاتصال اللحظي (WebSocket + REST Fallback) ═════════════════════
     
     async def ws_manager(self):
         streams = []
@@ -288,7 +291,6 @@ class LegendarySniperBotV5:
             streams.append(f"{sym}@bookTicker")
             streams.append(f"{sym}@kline_15m")
         
-        # اختيار رابط WebSocket بناءً على الوضع
         if self.mode == 'test':
             ws_url = f"wss://testnet.binance.vision/stream?streams={'/'.join(streams)}"
         else:
@@ -321,13 +323,12 @@ class LegendarySniperBotV5:
             except Exception as e:
                 logger.error(f"❌ خطأ في WebSocket: {e}")
                 
-                # إذا كان الـ Testnet يرفض الاتصال (404)، ننتقل للسحب العادي (REST)
                 if "404" in str(e) or "403" in str(e) or "rejected" in str(e):
                     logger.warning("⚠️ WebSocket محظور/غير متاح. يتم التحول لـ REST Polling (البديل الآمن)...")
-                    await self.rest_poller() # تشغيل البديل
-                    break # إيقاف محاولات WebSocket
+                    await self.rest_poller() 
+                    break 
                 else:
-                    await asyncio.sleep(5) # إعادة المحاولة بعد 5 ثواني للأخطاء العابرة
+                    await asyncio.sleep(5) 
 
     async def rest_poller(self):
         """بديل احترافي لـ WebSocket في حال فشل الاتصال (مثالي لـ Testnet)"""
@@ -343,26 +344,25 @@ class LegendarySniperBotV5:
                     if ticker:
                         self.live_prices[symbol] = {'bid': float(ticker['bidPrice']), 'ask': float(ticker['askPrice'])}
                         
-                    # 2. تحديث الشموع (تم نقلها هنا ليتم تحديثها باستمرار)
-                    df = await self.get_klines(symbol, '15m', 100)
-                    if df is not None:
+                    # 🔴 إصلاح 1: معالجة تدفق البيانات لتكون مطابقة للـ WS تماماً ومنع تصفيرها
+                    klines_data = await self._binance_request('GET', '/api/v3/klines', {'symbol': symbol, 'interval': '15m', 'limit': 100})
+                    if klines_data and len(klines_data) > 20:
                         records = []
-                        for _, row in df.iterrows():
+                        for k in klines_data:
                             records.append({
-                                'time': row['time'].timestamp() * 1000 if isinstance(row['time'], pd.Timestamp) else row['time'], 
-                                'open': row['open'], 'high': row['high'], 'low': row['low'], 
-                                'close': row['close'], 'volume': row['volume'], 'taker_buy_vol': row['taker_buy_vol']
+                                'time': k[0],  # Timestamp بالمللي ثانية كما يرسله الـ WS
+                                'open': float(k[1]), 'high': float(k[2]), 'low': float(k[3]), 
+                                'close': float(k[4]), 'volume': float(k[5]), 'taker_buy_vol': float(k[9])
                             })
                         self.live_klines[symbol] = records
                 
-                # انتظار 30 ثانية
                 await asyncio.sleep(30)
             except Exception as e:
                 logger.error(f"خطأ في REST Poller: {e}")
                 await asyncio.sleep(60)
 
     async def get_klines(self, symbol, interval='15m', limit=100):
-        """جلب الشموع التاريخية من بينانس (تعمل مع الحساب الحقيقي والتجريبي)"""
+        """جلب الشموع التاريخية من بينانس"""
         endpoint = '/api/v3/klines'
         data = await self._binance_request('GET', endpoint, {'symbol': symbol, 'interval': interval, 'limit': limit})
         if data and len(data) > 20:
@@ -381,6 +381,15 @@ class LegendarySniperBotV5:
     # ═════════════════════ التحليل والتنفيذ ═════════════════════
     async def analyze_coin(self, symbol):
         try:
+            # 🔴 إصلاح 4: دمج فلتر الفريم الأكبر (HTF - 1 Hour)
+            df_1h = await self.get_klines(symbol, '1h', 100)
+            if df_1h is None: return None
+            
+            df_1h = self.smc.detect_swings(df_1h, window=3)
+            _, htf_trend = self.smc.detect_bos_choch(df_1h)
+            if not htf_trend: return None # لا يوجد اتجاه واضح للساعة، نتجاهل
+            
+            # تحليل الفريم الأساسي (LTF - 15m)
             df_15m = self.get_live_df(symbol)
             if df_15m is None: return None
             
@@ -394,7 +403,6 @@ class LegendarySniperBotV5:
             prices = self.live_prices.get(symbol)
             if not prices: return None
             
-            # 1- إصلاح SELL Logic (استخدام bid للشراء، ask للبيع)
             price = prices['bid'] if micro_trend == 'bull' else prices['ask']
             
             result = {'symbol': symbol, 'price': price, 'score': 0, 'direction': None, 'sl': 0, 'tp': 0}
@@ -402,6 +410,10 @@ class LegendarySniperBotV5:
             if micro_trend == 'bull': result['score'] += 3; result['direction'] = 'BUY'
             elif micro_trend == 'bear': result['score'] -= 3; result['direction'] = 'SELL'
             else: return None
+
+            # 🔴 إصلاح 4: منع الدخول المخادع عكس الاتجاه العام للساعة
+            if result['direction'] == 'BUY' and htf_trend != 'bull': return None
+            if result['direction'] == 'SELL' and htf_trend != 'bear': return None
 
             for fvg in fvgs[-5:]:
                 if fvg['type'] == 'bull_fvg' and price >= fvg['bottom'] and price <= fvg['top'] and result['direction']=='BUY': result['score'] += 2; break
@@ -430,7 +442,6 @@ class LegendarySniperBotV5:
 
     async def execute_trade(self, analysis):
         if not self.TRADE_ENABLED: return
-        # 5- Max Position Limit Check
         if len(self.active_trades) >= self.MAX_OPEN_TRADES: return
         symbol, direction = analysis['symbol'], analysis['direction']
         if symbol in self.active_trades: return
@@ -445,12 +456,9 @@ class LegendarySniperBotV5:
         if sl_distance == 0: return
         raw_qty = risk_amount / sl_distance
         
-        # 2- تنسيق الكمية بناءً على Step Size
         qty = self.format_quantity(symbol, raw_qty)
-        
         side = 'BUY' if direction == 'BUY' else 'SELL'
         
-        # 7- التعامل مع Order States بشكل كامل
         result = await self._binance_request('POST', '/api/v3/order', {
             'symbol': symbol, 'side': side, 'type': 'MARKET', 'quantity': qty
         }, signed=True, is_trade_endpoint=True)
@@ -469,7 +477,7 @@ class LegendarySniperBotV5:
             trade_data = {
                 'symbol': symbol, 'side': side, 'entry_price': fill_price, 'quantity': total_qty,
                 'sl': analysis['sl'], 'tp': analysis['tp'], 'trailing_active': False, 
-                'highest_price': fill_price, 'lowest_price': fill_price, # 3- إضافة lowest_price للـ SELL
+                'highest_price': fill_price, 'lowest_price': fill_price, 
                 'entry_time': time.time(), 'score': analysis['score']
             }
             self.active_trades[symbol] = trade_data
@@ -492,7 +500,6 @@ class LegendarySniperBotV5:
             is_buy = trade['side'] == 'BUY'
             current_price = prices['bid'] if is_buy else prices['ask']
             
-            # 3- إصلاح Trailing Stop للـ SELL والـ BUY
             if is_buy:
                 if current_price > trade.get('highest_price', current_price): 
                     trade['highest_price'] = current_price
@@ -507,7 +514,6 @@ class LegendarySniperBotV5:
             
             should_close, reason = False, ""
 
-            # SL / TP
             if is_buy:
                 if current_price <= trade['sl']: should_close, reason = True, "🛑 ضرب SL"
                 elif current_price >= trade['tp']: should_close, reason = True, "🎯 وصل TP"
@@ -515,7 +521,6 @@ class LegendarySniperBotV5:
                 if current_price >= trade['sl']: should_close, reason = True, "🛑 ضرب SL"
                 elif current_price <= trade['tp']: should_close, reason = True, "🎯 وصل TP"
 
-            # Trailing Activation & Logic
             if not trade['trailing_active'] and current_pnl_pct > 1.5:
                 trade['trailing_active'] = True
                 if is_buy: trade['sl'] = trade['entry_price'] * 1.002
@@ -532,11 +537,9 @@ class LegendarySniperBotV5:
                     if new_sl < trade['sl']: trade['sl'] = new_sl
                     if current_price >= trade['sl']: should_close, reason = True, "🔄 وقف متحرك هبوطي"
 
-            # Time Decay
             if time.time() - trade['entry_time'] > 43200 and abs(current_pnl_pct) < 0.5:
                 should_close, reason = True, "⏰ خروج زمني"
 
-            # RSI Extreme Protection
             df = self.get_live_df(symbol)
             if df is not None and len(df) > 5:
                 rsi = ta.momentum.RSIIndicator(df['close'], window=14).rsi().iloc[-1]
@@ -562,7 +565,6 @@ class LegendarySniperBotV5:
                 total_qty = sum(float(f['qty']) for f in fills)
                 fill_price = total_cost / total_qty if total_qty > 0 else close_price
                 
-                # 1- حساب PnL الصحيح للـ SELL
                 if trade['side'] == 'BUY':
                     pnl = (fill_price - trade['entry_price']) * total_qty
                 else:
@@ -588,24 +590,22 @@ class LegendarySniperBotV5:
     async def main_loop(self):
         self.session = aiohttp.ClientSession()
         await self.db.init_db()
-        await self.load_market_data() # تحميل الـ Step Sizes
+        await self.load_market_data() 
         
         self.active_trades = await self.db.load_active_trades() 
-        # حماية إضافية: إذا تم مسح الـ DB، اسحب الصفقات المفتوحة من بينانس مباشرة
         if not self.active_trades and self.TRADE_ENABLED:
             logger.info("قاعدة البيانات فارغة، جاري التزامن مع بينانس لاستعادة الصفقات...")
             open_orders = await self._binance_request('GET', '/api/v3/openOrders', signed=True, is_trade_endpoint=True)
             if open_orders:
                 for order in open_orders:
-                    # إذا كان هناك أوامر مفتوحة (مثل وقف خسارة)، نستعيد بيانات الصفقة
-                    pass # هنا يمكن تطوير استرجاع بيانات الصفقة لو تم مسحها
+                    pass 
         
-        await self.sync_with_binance() # 6- تطابق البيانات
+        await self.sync_with_binance() 
         
         asyncio.create_task(self.ws_manager()) 
         await asyncio.sleep(10) 
         
-        await self.tg("🔥 *القناص V5.1 بدأ العمل!*\n🛡️ تراكمي ومستقر (Sell + Trailing + StepSize محسنة)")
+        await self.tg("🔥 *القناص V5.1 بدأ العمل!*\n🛡️ تراكمي ومستقر (Sell + Trailing + StepSize + HTF Filter محسنة)")
         self.last_scan_time = time.time()
         
         try:
@@ -613,8 +613,7 @@ class LegendarySniperBotV5:
                 try:
                     await self.monitor_trades()
                     
-                    # 4- إصلاح Scan Timer بشكل تراكمي مستقر
-                    if time.time() - self.last_scan_time >= 900: # كل 15 دقيقة
+                    if time.time() - self.last_scan_time >= 900: 
                         await self.quick_scan()
                         self.last_scan_time = time.time()
                         
