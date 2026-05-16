@@ -294,9 +294,9 @@ class LegendarySniperBotV6:
         self.trade_url = "https://api.binance.com"
         self._testnet_failed = False
 
-        if self.mode == 'test':
+     if self.mode == 'test':
             self.data_url = "https://testnet.binance.vision"
-            self.trade_url = "https://testnet.binanceapi.com"
+            self.trade_url = "https://testnet.binance.vision"
 
         self.all_usdt_pairs = []
         self.known_symbols = set()
@@ -369,13 +369,13 @@ class LegendarySniperBotV6:
             pass
 
     # ═════════════════════ بينانس API (محصّن) ═════════════════════
-    async def _switch_to_real(self):
+   async def _switch_to_real(self):
         if not self._testnet_failed:
             self._testnet_failed = True
             self.data_url = "https://api.binance.com"
             self.trade_url = "https://api.binance.com"
-            logger.warning("⚠️ Testnet غير متاح! تم التحول تلقائياً للسيرفر الحقيقي (للقراءة فقط)")
-            await self.tg("⚠️ *Testnet غير متاح!*\nتم التحول تلقائياً للسيرفر الحقيقي (قراءة فقط)")
+            logger.warning("⚠️ Testnet غير متاح! تم التحول للسيرفر الحقيقي — التداول يعمل بمفاتيح API الحقيقية")
+            await self.tg("⚠️ *Testnet غير متاح!*\nتم التحول للسيرفر الحقيقي\n📝 التداول فعّال — تأكد أن مفاتيح API حقيقية!")
 
     async def _binance_request(self, method, endpoint, params=None,
                                signed=False, is_trade_endpoint=False,
@@ -1661,7 +1661,12 @@ class LegendarySniperBotV6:
         asyncio.create_task(self.ws_manager())
         await asyncio.sleep(10)
 
-        mode_str = "🧪 تجريبي (Testnet)" if self.mode == 'test' and not self._testnet_failed else "💰 حقيقي (Real)"
+   if self.mode == 'test' and not self._testnet_failed:
+            mode_str = "🧪 تجريبي (Testnet)"
+        elif self.mode == 'test' and self._testnet_failed:
+            mode_str = "💰 حقيقي (Real) — Testnet كان معطّلاً"
+        else:
+            mode_str = "💰 حقيقي (Real)"
         mode_trade = "⚔️ تداول تلقائي" if self.TRADE_ENABLED else "👁️ مراقبة فقط"
 
         msg = ("🔥 *القناص الأسطوري V6.2 — بدأ العمل!*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
