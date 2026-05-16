@@ -294,9 +294,12 @@ class LegendarySniperBotV6:
         self.trade_url = "https://api.binance.com"
         self._testnet_failed = False
 
-     if self.mode == 'test':
-        self.data_url = "https://testnet.binance.vision"
-        self.trade_url = "https://testnet.binance.vision"
+        if self.mode == 'test':
+            self.data_url = "https://testnet.binance.vision"
+            self.trade_url = "https://testnet.binance.vision"
+        else:
+            self.data_url = "https://api.binance.com"
+            self.trade_url = "https://api.binance.com"
 
         self.all_usdt_pairs = []
         self.known_symbols = set()
@@ -369,7 +372,7 @@ class LegendarySniperBotV6:
             pass
 
     # ═════════════════════ بينانس API (محصّن) ═════════════════════
-   async def _switch_to_real(self):
+    async def _switch_to_real(self):
         if not self._testnet_failed:
             self._testnet_failed = True
             self.data_url = "https://api.binance.com"
