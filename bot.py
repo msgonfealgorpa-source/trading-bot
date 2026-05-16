@@ -1653,7 +1653,7 @@ class LegendarySniperBotV6:
                 del self.active_trades[sym]
 
     # ═════════════════════ اللوب الرئيسي ═════════════════════
-            async def main_loop(self):
+    async def main_loop(self):
         self.session = aiohttp.ClientSession()
         await self.db.init_db()
         await self.load_market_data()
