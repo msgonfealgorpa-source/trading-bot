@@ -333,30 +333,29 @@ class LegendarySniperBotV5:
         """بديل احترافي لـ WebSocket في حال فشل الاتصال (مثالي لـ Testnet)"""
         logger.info("🔄 بدء سحب الأسعار والشموع عبر REST API كل 30 ثانية...")
         
-        # سحب بيانات أولية للشموع قبل البدء
-        for coin in self.priority:
-            symbol = f"{coin}USDT"
-            df = await self.get_klines(symbol, '15m', 100)
-            if df is not None:
-                records = []
-                for _, row in df.iterrows():
-                    records.append({
-                        'time': row['time'].timestamp() * 1000 if isinstance(row['time'], pd.Timestamp) else row['time'], 
-                        'open': row['open'], 'high': row['high'], 'low': row['low'], 
-                        'close': row['close'], 'volume': row['volume'], 'taker_buy_vol': row['taker_buy_vol']
-                    })
-                self.live_klines[symbol] = records
-        
         while True:
             try:
                 for coin in self.priority:
                     symbol = f"{coin}USDT"
-                    # سحب السعر اللحظي (Bid/Ask)
+                    
+                    # 1. تحديث السعر اللحظي (Bid/Ask)
                     ticker = await self._binance_request('GET', '/api/v3/ticker/bookTicker', {'symbol': symbol})
                     if ticker:
                         self.live_prices[symbol] = {'bid': float(ticker['bidPrice']), 'ask': float(ticker['askPrice'])}
+                        
+                    # 2. تحديث الشموع (تم نقلها هنا ليتم تحديثها باستمرار)
+                    df = await self.get_klines(symbol, '15m', 100)
+                    if df is not None:
+                        records = []
+                        for _, row in df.iterrows():
+                            records.append({
+                                'time': row['time'].timestamp() * 1000 if isinstance(row['time'], pd.Timestamp) else row['time'], 
+                                'open': row['open'], 'high': row['high'], 'low': row['low'], 
+                                'close': row['close'], 'volume': row['volume'], 'taker_buy_vol': row['taker_buy_vol']
+                            })
+                        self.live_klines[symbol] = records
                 
-                # انتظار 30 ثانية (معدل آمن جداً لتجنب الحظر)
+                # انتظار 30 ثانية
                 await asyncio.sleep(30)
             except Exception as e:
                 logger.error(f"خطأ في REST Poller: {e}")
