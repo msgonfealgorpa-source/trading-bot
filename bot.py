@@ -203,7 +203,7 @@ class LegendarySniperBotV5:
         self.mode = os.environ.get('BINANCE_MODE', 'real').lower()
         if self.mode == 'test':
             self.data_url = "https://testnet.binance.vision"
-            self.trade_url = "https://testnet.binance.vision"
+            self.trade_url = "https://testnet.binanceapi.com"  # الرابط المحدث والأكثر استقراراً لـ API التجريبي
             logger.info("🧪 البوت يعمل في الوضع التجريبي (Testnet)")
         else:
             self.data_url = "https://data-api.binance.vision"
