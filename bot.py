@@ -1661,7 +1661,7 @@ class LegendarySniperBotV6:
         asyncio.create_task(self.ws_manager())
         await asyncio.sleep(10)
 
-   if self.mode == 'test' and not self._testnet_failed:
+        if self.mode == 'test' and not self._testnet_failed:
             mode_str = "🧪 تجريبي (Testnet)"
         elif self.mode == 'test' and self._testnet_failed:
             mode_str = "💰 حقيقي (Real) — Testnet كان معطّلاً"
