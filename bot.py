@@ -295,8 +295,8 @@ class LegendarySniperBotV6:
         self._testnet_failed = False
 
      if self.mode == 'test':
-            self.data_url = "https://testnet.binance.vision"
-            self.trade_url = "https://testnet.binance.vision"
+        self.data_url = "https://testnet.binance.vision"
+        self.trade_url = "https://testnet.binance.vision"
 
         self.all_usdt_pairs = []
         self.known_symbols = set()
