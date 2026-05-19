@@ -2,11 +2,10 @@
 ═══════════════════════════════════════════════════════════════════════
   🔥 القناص الأسطوري V6.2 — Legendary Sniper (Strict Capital Protection) 🔥
 ═══════════════════════════════════════════════════════════════════════
-  تحديثات V6.2:
-  ✅ فلتر HTF صارم: رفض قاطع لأي صفقة تعاكس فريم الساعة (حماية رأس المال)
-  ✅ Pre-filter صارم: سيولة عالية فقط (500K$ حجم، 200+ صفقة، أفضل 80 عملة)
-  ✅ تثبيت MIN_SCORE_TO_TRADE = 7 كحد أدنى إجباري
-  ✅保留了 V6.1 Fixes: تنسيق الأسعار، DexScreener، معالجة Testnet
+  تحديثات V6.2 (معدل):
+  ✅ خفض نقاط الدخول لـ 5 بدل 7 (لحل مشكلة عدم الدخول)
+  ✅ تحويل فلتر HTF من رافض قاطع إلى معاقب/داعم (للسماح بالانعكاسات)
+  ✅ إضافة بونص +3 نقاط للعملات الرائجة في بينانس (حصري)
 ═══════════════════════════════════════════════════════════════════════
 """
 
@@ -277,8 +276,8 @@ class LegendarySniperBotV6:
         self.STOP_LOSS_PCT = float(os.environ.get('SL_PCT', '3'))
         self.TAKE_PROFIT_PCT = float(os.environ.get('TP_PCT', '6'))
         
-        # ═══ تعديل 3: تثبيت النقاط كحد أدنى لحماية رأس المال ═══
-        self.MIN_SCORE_TO_TRADE = 7  # مقفل على 7 كحد أدنى إجباري لحماية رأس المال
+        # ═══ تعديل استراتيجي 1: خفض النقاط لـ 5 ليسمح بدخول الصفقات ═══
+        self.MIN_SCORE_TO_TRADE = 5  # كان 7 وتسبب في تجميد البوت
         
         self.MAX_OPEN_TRADES = int(os.environ.get('MAX_TRADES', '3'))
         self.MIN_TRADE_USDT = float(os.environ.get('MIN_TRADE_USDT', '10'))
@@ -807,9 +806,30 @@ class LegendarySniperBotV6:
                 elif sig_type == 'CHoCH_Bear':
                     result['signals_smc'].append("📉 CHoCH هبوطي (تغيير اتجاه) ⚡")
 
-            # ═══ تعديل 1: فلتر HTF صارم — رفض قاطع لحماية رأس المال ═══
-            if result['direction'] == 'BUY' and htf_trend != 'bull': return None
-            if result['direction'] == 'SELL' and htf_trend != 'bear': return None
+            # ═══ تعديل استراتيجي 2: فلتر HTF مرن بدل الرفض القاطع ═══
+            if result['direction'] == 'BUY':
+                if htf_trend == 'bull':
+                    result['score'] += 2
+                    result['signals_smc'].append("✅ HTF صعودي متوافق (قوة إضافية)")
+                else:
+                    result['score'] -= 1  # عقاب بدل الرفض للسماح بالانعكاسات
+                    result['signals_smc'].append("⚠️ HTF غير متوافق (حذر)")
+            elif result['direction'] == 'SELL':
+                if htf_trend == 'bear':
+                    result['score'] -= 2
+                    result['signals_smc'].append("✅ HTF هبوطي متوافق (قوة إضافية)")
+                else:
+                    result['score'] += 1  # عقاب بدل الرفض
+                    result['signals_smc'].append("⚠️ HTF غير متوافق (حذر)")
+
+            # ═══ تعديل استراتيجي 3: بونص العملات الرائجة في بينانس (حصري) ═══
+            base_asset = symbol.replace('USDT', '')
+            if base_asset in self.hot_coins:
+                if result['direction'] == 'BUY':
+                    result['score'] += 3
+                else:
+                    result['score'] -= 3
+                result['signals_smc'].append("🔥 عملة رائجة على بينانس (بونص حصري)")
 
             # FVG
             for fvg in fvgs[-5:]:
@@ -875,7 +895,7 @@ class LegendarySniperBotV6:
                     result['sl'] = price * (1 + self.STOP_LOSS_PCT / 100)
                     result['tp'] = price * (1 - self.TAKE_PROFIT_PCT / 100)
 
-            # ═══ 6. فلتر النقاط الأدنى ═══
+            # ═══ 6. فلتر النقاط الأدنى (تم تعديله بالأعلى لـ 5 بدل 7) ═══
             if abs(result['score']) < self.MIN_SCORE_TO_TRADE:
                 self.set_cached_analysis(symbol, None)
                 return None
@@ -1306,7 +1326,6 @@ class LegendarySniperBotV6:
             price_change = float(ticker.get('priceChangePercent', 0))
             trades = int(ticker.get('count', 0))
 
-            # ═══ تعديل 2: تشديد الفلتر المسبق لسيولة عالية فقط ═══
             if quote_vol > 500000 and -30 < price_change < 30 and trades > 200:
                 interest_score = 0
                 base = symbol.replace('USDT', '')
@@ -1333,7 +1352,6 @@ class LegendarySniperBotV6:
 
         candidates.sort(key=lambda x: x['interest'], reverse=True)
 
-        # ═══ تعديل 2: تضييق النطاق لأفضل 80 عملة فقط ═══
         top_candidates = candidates[:80]
 
         logger.info(f"📊 Pre-filter: {len(candidates)} مرشح ← تحليل أفضل {len(top_candidates)}")
@@ -1675,12 +1693,12 @@ class LegendarySniperBotV6:
                f"📡 الوضع: {mode_trade}\n"
                f"🌐 السيرفر: {mode_str}\n"
                f"💰 المخاطرة/صفقة: {self.RISK_PER_TRADE_PCT}%\n"
-               f"📊 حد النقاط: {self.MIN_SCORE_TO_TRADE} (مقفل لحماية رأس المال)\n"
+               f"📊 حد النقاط: {self.MIN_SCORE_TO_TRADE} (تم تعديله لفتح الصفقات)\n"
                f"📂 أقصى صفقات: {self.MAX_OPEN_TRADES}\n"
                f"🪙 أزواج محملة: {len(self.all_usdt_pairs)}\n"
                f"📏 أحجام خطوة: {len(self.step_sizes_cache)}\n"
                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-               "🛡️ فلاتر صارمة: HTF صارم + سيولة عالية + 7 نقاط حد أدنى\n"
+               "🛡️ فلاتر: HTF مرن + بونص العملات الرائجة + 5 نقاط حد أدنى\n"
                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
                "⏰ المسح الشامل: كل ساعتين\n"
                "🎯 المسح الذكي: كل 30 دقيقة\n"
