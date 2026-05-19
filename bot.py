@@ -808,8 +808,8 @@ class LegendarySniperBotV6:
                     result['signals_smc'].append("📉 CHoCH هبوطي (تغيير اتجاه) ⚡")
 
             # ═══ تعديل 1: فلتر HTF صارم — رفض قاطع لحماية رأس المال ═══
-          #  if result['direction'] == 'BUY' and htf_trend != 'bull': return None
-          #  if result['direction'] == 'SELL' and htf_trend != 'bear': return None
+            if result['direction'] == 'BUY' and htf_trend != 'bull': return None
+            if result['direction'] == 'SELL' and htf_trend != 'bear': return None
 
             # FVG
             for fvg in fvgs[-5:]:
