@@ -185,14 +185,15 @@ class SMCEngine:
     @staticmethod
     def detect_swings(df, window=3):
         df = df.copy()
-        df.loc[:, 'sw_high'] = np.nan
-        df.loc[:, 'sw_low'] = np.nan
-        highs, lows = df['high'].values, df['low'].values
-        for i in range(window, len(df) - window):
-            if all(highs[i] >= highs[i-window:i]) and all(highs[i] >= highs[i+1:i+window+1]):
-                df.loc[df.index[i], 'sw_high'] = highs[i]
-            if all(lows[i] <= lows[i-window:i]) and all(lows[i] <= lows[i+1:i+window+1]):
-                df.loc[df.index[i], 'sw_low'] = lows[i]
+        df['sw_high'] = np.nan
+        df['sw_low'] = np.nan
+        
+        # استخدام دوال pandas المتدحرجة لالتقاط القمم والقيعان بسهولة
+        highs = df['high'].rolling(window=2*window+1, center=True).max()
+        lows = df['low'].rolling(window=2*window+1, center=True).min()
+        
+        df.loc[df['high'] == highs, 'sw_high'] = df['high']
+        df.loc[df['low'] == lows, 'sw_low'] = df['low']
         return df
 
     @staticmethod
@@ -258,7 +259,8 @@ class RiskManager:
 
     def check_spread(self, symbol, ask, bid):
         if not ask or not bid or bid == 0: return False
-        return ((ask - bid) / bid) * 100 <= 0.1
+        # تم رفع السبريد إلى 0.3% ليناسب العملات المتقلبة والرائجة
+        return ((ask - bid) / bid) * 100 <= 0.3
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -753,46 +755,97 @@ class LegendarySniperBotV6:
         if cached is not None: return cached
 
         try:
-            # ═══ 1. تحليل الفريم الأكبر (1h) ═══
-            df_1h = await self.get_klines(symbol, '1h', 100)
-            if df_1h is None or len(df_1h) < 50: return None
-
-            df_1h = self.smc.detect_swings(df_1h, window=3)
-            _, htf_trend = self.smc.detect_bos_choch(df_1h)
-
-            # ═══ 2. تحليل الفريم الأساسي (15m) ═══
+            # ═══ 1. جلب البيانات ═══
             df_15m = self.get_live_df(symbol)
             if df_15m is None or len(df_15m) < 50:
                 df_15m = await self.get_klines(symbol, '15m', 100)
             if df_15m is None or len(df_15m) < 50: return None
 
-            df_15m = self.smc.detect_swings(df_15m, window=3)
-            signals_smc, micro_trend = self.smc.detect_bos_choch(df_15m)
-            if not micro_trend: return None
-
-            fvgs = self.smc.detect_fvg(df_15m)
-            obs = self.smc.detect_order_blocks(df_15m, signals_smc, micro_trend)
-
             prices = self.live_prices.get(symbol)
             if not prices: return None
 
-            price = prices['bid'] if micro_trend == 'bull' else prices['ask']
+            # ═══ 2. تحديد الاتجاه الأساسي (بديل SMC لمنع تجميد البوت) ═══
+            ema50 = ta.trend.EMAIndicator(df_15m['close'], window=50).ema_indicator().iloc[-1]
+            ema200 = ta.trend.EMAIndicator(df_15m['close'], window=200).ema_indicator().iloc[-1]
+            current_close = df_15m['close'].iloc[-1]
+            
+            direction = 'BUY' if current_close > ema50 else 'SELL'
+            price = prices['ask'] if direction == 'BUY' else prices['bid']
 
             result = {
                 'symbol': symbol, 'price': price,
-                'score': 0, 'direction': None,
+                'score': 0, 'direction': direction,
                 'sl': 0, 'tp': 0,
                 'signals_smc': [], 'signals_indicators': [],
                 'rsi': None, 'volume_ratio': None
             }
 
-            # ═══ 3. تقييم SMC ═══
-            if micro_trend == 'bull':
-                result['score'] += 3; result['direction'] = 'BUY'
-            elif micro_trend == 'bear':
-                result['score'] -= 3; result['direction'] = 'SELL'
+            # إعطاء نقاط للاتجاه العام الواضح
+            if direction == 'BUY' and ema50 > ema200:
+                result['score'] += 2
+                result['signals_indicators'].append("✅ اتجاه عام صاعد (EMA50 > EMA200)")
+            elif direction == 'SELL' and ema50 < ema200:
+                result['score'] += 2
+                result['signals_indicators'].append("✅ اتجاه عام هابط (EMA50 < EMA200)")
+
+            # ═══ 3. دمج محرك SMC كداعم (وليس كعائق) ═══
+            df_15m = self.smc.detect_swings(df_15m, window=3)
+            signals_smc, micro_trend = self.smc.detect_bos_choch(df_15m)
+            
+            if micro_trend == 'bull' and direction == 'BUY':
+                result['score'] += 3
+                result['signals_smc'].append("📈 SMC: اتجاه صاعد مؤكد")
+            elif micro_trend == 'bear' and direction == 'SELL':
+                result['score'] += 3
+                result['signals_smc'].append("📉 SMC: اتجاه هابط مؤكد")
+            elif micro_trend and micro_trend != direction.lower():
+                # خصم نقاط إذا تعارض SMC مع الاتجاه الأساسي
+                result['score'] -= 2
+                result['signals_smc'].append("⚠️ تعارض بين SMC والاتجاه الأساسي")
+
+            # FVG & Order Blocks
+            fvgs = self.smc.detect_fvg(df_15m)
+            for fvg in fvgs[-3:]:
+                if fvg['type'] == 'bull_fvg' and direction == 'BUY' and fvg['bottom'] * 0.99 <= price <= fvg['top'] * 1.01:
+                    result['score'] += 2
+                    result['signals_smc'].append("🎯 ارتداد من FVG صعودي")
+                    break
+
+            # ═══ 4. بونص العملات الرائجة ═══
+            base_asset = symbol.replace('USDT', '')
+            if base_asset in self.hot_coins:
+                result['score'] += 2
+                result['signals_indicators'].append("🔥 عملة رائجة (بونص)")
+
+            # ═══ 5. تحليل المؤشرات التقليدية (الزخم) ═══
+            ind_score, ind_signals = self._analyze_indicators(df_15m, result['direction'])
+            result['score'] += ind_score
+            result['signals_indicators'].extend(ind_signals)
+
+            # ═══ 6. حساب SL/TP بناءً على التقلبات (ATR) ═══
+            atr = ta.volatility.AverageTrueRange(
+                high=df_15m['high'], low=df_15m['low'],
+                close=df_15m['close'], window=14
+            ).average_true_range().iloc[-1]
+
+            if result['direction'] == 'BUY':
+                result['sl'] = price - (atr * 2.0) # توسيع الوقف قليلاً لتجنب ضربه بالذيول
+                result['tp'] = price + (atr * 4.0) # نسبة العائد للمخاطرة 1:2
             else:
+                result['sl'] = price + (atr * 2.0)
+                result['tp'] = price - (atr * 4.0)
+
+            # ═══ 7. الفلتر النهائي للدخول ═══
+            if result['score'] < self.MIN_SCORE_TO_TRADE:
+                self.set_cached_analysis(symbol, None)
                 return None
+
+            self.set_cached_analysis(symbol, result)
+            return result
+
+        except Exception as e:
+            logger.debug(f"خطأ تحليل {symbol}: {e}")
+            return None
 
             # ─── إضافة إشارات BOS/CHoCH للعرض ───
             for sig in signals_smc[-5:]:
