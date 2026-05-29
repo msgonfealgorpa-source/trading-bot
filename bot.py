@@ -1,18 +1,16 @@
 """
 ═══════════════════════════════════════════════════════════════════════
-  🔥 القناص الأسطوري V7.0 — Legendary Sniper (Futures Whale Hunter) 🔥
+  🔥 القناص الأسطوري V7.1 — Legendary Sniper (Multi-TF & ATR Shield) 🔥
 ═══════════════════════════════════════════════════════════════════════
-  تحديثات V7.0 (تغيير 190 درجة):
-  ✅ نقل بالكامل إلى بينانس عقود الآجلة (USDT-M Futures)
-  ✅ الرافعة المالية 25x لكل الصفقات
-  ✅ حجم صفقة ثابت 10 دولار للصفقة الواحدة
-  ✅ استراتيجية SMC خالصة: عرض وطلب (OB) + تصفية سيولة (Sweep)
-  ✅ نظام Hit & Run لضمان نسبة ربح عالية جداً (جني سريع 90% من الصفقة)
-  ✅ فلترة العملات ذات التقلب العالي (التي تتحرك بسرعة وعنف)
+  تحديثات V7.1 (التعديلات المطلوبة):
+  ✅ دمج الفريمات: 1 ساعة (لرسم مناطق الحيتان) + 5 دقائق (لزناد الدخول)
+  ✅ وقف الخسارة الديناميكي ATR: حماية من ذيول السيولة (Wicks) في العملات العنيفة
+  ✅ نظام Hit & Run لضمان نسبة ربح عالية جداً
+  ✅ الرافعة 25x وحجم صفقة 10 دولار للعقود الآجلة
 ═══════════════════════════════════════════════════════════════════════
 """
 
-import asyncio, aiohttp, json, math, os, sys, time, logging, requests, sqlite3
+import asyncio, aiohttp, json, math, os, sys, time, logging, requests
 import pandas as pd
 import numpy as np
 import hmac
@@ -111,59 +109,36 @@ class DatabaseManager:
 class WhaleSMCEngine:
     @staticmethod
     def detect_order_blocks(df, trend):
-        """
-        كشف مناطق العرض والطلب (Order Blocks)
-        الطلب (Bullish OB): آخر شمعة هابطة قبل الدفع الصعودي العنيف
-        العرض (Bearish OB): آخر شمعة صاعدة قبل الدفع الهبوطي العنيف
-        """
         obs = []
-        threshold = 0.015 # الدفع العنيف يجب أن يكون 1.5% على الأقل (يناسب العملات المتقلبة)
+        threshold = 0.015 # الدفع العنيف 1.5%
         
         for i in range(2, len(df)-1):
-            # كشف طلب (Demand Zone)
-            if df['close'].iloc[i] > df['open'].iloc[i]: # شمعة صاعدة
-                body = abs(df['close'].iloc[i] - df['open'].iloc[i])
-                prev_body = abs(df['open'].iloc[i] - df['close'].iloc[i-1])
+            if df['close'].iloc[i] > df['open'].iloc[i]: 
                 impulse_pct = (df['close'].iloc[i] - df['low'].iloc[i-1]) / df['low'].iloc[i-1]
-                
                 if df['close'].iloc[i-1] < df['open'].iloc[i-1] and impulse_pct > threshold:
-                    obs.append({
-                        'type': 'demand', 
-                        'top': df['open'].iloc[i-1], 
-                        'bottom': df['low'].iloc[i-1],
-                        'index': i-1
-                    })
+                    obs.append({'type': 'demand', 'top': df['open'].iloc[i-1], 'bottom': df['low'].iloc[i-1], 'index': i-1})
             
-            # كشف عرض (Supply Zone)
-            elif df['close'].iloc[i] < df['open'].iloc[i]: # شمعة هابطة
+            elif df['close'].iloc[i] < df['open'].iloc[i]: 
                 impulse_pct = (df['high'].iloc[i-1] - df['close'].iloc[i]) / df['high'].iloc[i-1]
-                
                 if df['close'].iloc[i-1] > df['open'].iloc[i-1] and impulse_pct > threshold:
-                    obs.append({
-                        'type': 'supply', 
-                        'top': df['high'].iloc[i-1], 
-                        'bottom': df['close'].iloc[i-1],
-                        'index': i-1
-                    })
+                    obs.append({'type': 'supply', 'top': df['high'].iloc[i-1], 'bottom': df['close'].iloc[i-1], 'index': i-1})
         return obs
 
     @staticmethod
-    def detect_liquidity_sweep(df, ob_zone, direction):
+    def detect_liquidity_sweep(df_5m, ob_zone, direction):
         """
-        كشف تصفية السيولة: السعر يخترق المنطقة قليلاً ثم ينعكس (هذا هو دخول الحوت)
+        كشف تصفية السيولة من فريم 5 دقائق (الزناد السريع)
         """
-        current_low = df['low'].iloc[-1]
-        current_high = df['high'].iloc[-1]
-        current_close = df['close'].iloc[-1]
-        prev_close = df['close'].iloc[-2]
+        current_low = df_5m['low'].iloc[-1]
+        current_high = df_5m['high'].iloc[-1]
+        current_close = df_5m['close'].iloc[-1]
+        prev_close = df_5m['close'].iloc[-2]
 
         if direction == 'BUY' and ob_zone['type'] == 'demand':
-            # السعر نزل تحت منطقة الطلب ثم أغلق فوقها = تصفية سيولة بيعية (فخ الدببة)
             if current_low < ob_zone['bottom'] and current_close > ob_zone['top'] and current_close > prev_close:
                 return True
                 
         elif direction == 'SELL' and ob_zone['type'] == 'supply':
-            # السعر صعد فوق منطقة العرض ثم أغلق تحتها = تصفية سيولة شرائية (فخ الثيران)
             if current_high > ob_zone['top'] and current_close < ob_zone['bottom'] and current_close < prev_close:
                 return True
                 
@@ -171,7 +146,7 @@ class WhaleSMCEngine:
 
 
 # ══════════════════════════════════════════════════════════════════════
-#                  🔥 القناص الأسطوري V7.0 (Futures) 🔥
+#           🔥 القناص الأسطوري V7.1 (Futures Multi-TF) 🔥
 # ══════════════════════════════════════════════════════════════════════
 class LegendarySniperFuturesV7:
     def __init__(self):
@@ -181,20 +156,14 @@ class LegendarySniperFuturesV7:
         self.binance_api_secret = os.environ.get('BINANCE_API_SECRET', '')
 
         self.TRADE_ENABLED = os.environ.get('TRADE_ENABLED', 'false').lower() == 'true'
-        self.LEVERAGE = 25  # الرافعة المالية كما طلبت
-        self.TRADE_SIZE_USDT = 10.0 # حجم الصفقة 10 دولار كما طلبت
+        self.LEVERAGE = 25
+        self.TRADE_SIZE_USDT = 10.0
         self.MAX_OPEN_TRADES = 5
-        
-        # إدارة الصفقة (Hit & Run لتحقيق نسبة فوز عالية)
-        self.TP1_PCT = 0.01  # جني أرباح 1% (يعادل 25% ربح من الهامش) لـ 90% من الصفقة
-        self.TP2_PCT = 0.03  # هدف ثاني 3% للـ 10% المتبقية مع وقف متحرك
-        self.SL_PCT = 0.015  # وقف خسارة 1.5% (يعادل خسارة 37.5% من الهامش - يجب الدقة في الدخول)
 
         self.db = DatabaseManager()
         self.smc = WhaleSMCEngine()
         self.session = None
 
-        # روابط العقود الآجلة (Futures)
         self.data_url = "https://fapi.binance.com"
         self.trade_url = "https://fapi.binance.com"
         
@@ -203,13 +172,10 @@ class LegendarySniperFuturesV7:
         self.live_prices = {}
         self.active_trades = {}
         
-        # عملات متقلبة عنيفة مفضلة (تتحرك بسرعة وتعطي أرباح ضخمة)
-        self.volatile_targets = ['BEAT', 'PEOPLE', 'UNFI', 'CELr', 'LIT', 'SFP', 'ALICE', 'ATA', 'MASK', 'ANT']
+        self.volatile_targets = ['BEAT', 'PEOPLE', 'UNFI', 'CELR', 'LIT', 'SFP', 'ALICE', 'ATA', 'MASK', 'ANT']
 
         self.stats = {'total_scans': 0, 'trades_executed': 0, 'wins': 0, 'losses': 0}
-        self.TZ = ZoneInfo("Africa/Tripoli")
 
-    # ═════════════════════ تنسيق ذكي ═════════════════════
     def fmt_price(self, price):
         if price is None or price == 0: return "$0"
         if price < 0.00001: return f"${price:.10f}"
@@ -226,7 +192,6 @@ class LegendarySniperFuturesV7:
                 data={'chat_id': self.tg_chat, 'text': msg, 'parse_mode': 'Markdown'}, timeout=10)
         except: pass
 
-    # ═════════════════════ بينانس Futures API ═════════════════════
     def _sign(self, params):
         params['timestamp'] = int(time.time() * 1000)
         query = urlencode(params)
@@ -240,13 +205,16 @@ class LegendarySniperFuturesV7:
             try:
                 url = f"{self.trade_url}{endpoint}"
                 headers = {'X-MBX-APIKEY': self.binance_api_key} if signed else {}
-                req_params = self._sign(params.copy()) if signed else params
+                req_params = self._sign(params.copy()) if signed and params else params
                 
                 async with self.session.request(method, url, params=req_params, headers=headers, timeout=15) as r:
                     if r.status == 200:
                         return await r.json()
                     elif r.status == 429:
                         await asyncio.sleep(10 * (attempt + 1))
+                    elif r.status == 401:
+                        logger.error("❌ خطأ في مفاتيح API!")
+                        return None
                     else:
                         err = await r.text()
                         logger.warning(f"Futures API Error {r.status}: {err[:100]}")
@@ -256,20 +224,16 @@ class LegendarySniperFuturesV7:
                 await asyncio.sleep(2 ** attempt)
         return None
 
-    # ═════════════════════ إعداد العقود الآجلة ═════════════════════
     async def setup_futures_account(self):
-        # التأكد من وضع الهامش المعزول والرافعة 25x لكل العملات
         msg = "⚙️ *إعداد حساب العقود الآجلة (الرافعة 25x)*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
         setup_count = 0
         
-        for pair in self.all_futures_pairs:
+        for pair in self.all_futures_pairs[:50]: # نضبط أهم 50 زوج لتسريع البوت
             symbol = pair['symbol']
             try:
-                # محاولة ضبط الرافعة
                 lev_res = await self._fapi_request('POST', '/fapi/v1/leverage', 
                     {'symbol': symbol, 'leverage': self.LEVERAGE}, signed=True)
                 
-                # محاولة ضبط الهامش المعزول
                 margin_res = await self._fapi_request('POST', '/fapi/v1/marginType', 
                     {'symbol': symbol, 'marginType': 'ISOLATED'}, signed=True)
                     
@@ -277,13 +241,11 @@ class LegendarySniperFuturesV7:
                     setup_count += 1
             except:
                 pass
-            
-            await asyncio.sleep(0.1) # تجنب حظر API
+            await asyncio.sleep(0.15)
             
         msg += f"✅ تم ضبط الرافعة 25x والهامش المعزول لـ {setup_count} زوج"
         await self.tg(msg)
 
-    # ═════════════════════ تحميل بيانات السوق ═════════════════════
     async def load_market_data(self):
         data = await self._fapi_request('GET', '/fapi/v1/exchangeInfo')
         if not data: return
@@ -304,9 +266,8 @@ class LegendarySniperFuturesV7:
         precision = int(round(-math.log10(step))) if step < 1 else 0
         return math.floor(qty * (10 ** precision)) / (10 ** precision)
 
-    # ═════════════════════ WebSocket للعقود الآجلة ═════════════════════
     async def ws_manager(self):
-        streams = [f"{sym.lower()}@bookTicker" for sym, _ in self.step_sizes_cache.items()]
+        streams = [f"{sym.lower()}@bookTicker" for sym in self.step_sizes_cache.keys()]
         ws_url = f"wss://fstream.binance.com/stream?streams={'/'.join(streams[:200])}"
 
         while True:
@@ -323,7 +284,7 @@ class LegendarySniperFuturesV7:
                 logger.error(f"❌ خطأ WebSocket: {str(e)[:50]}")
                 await asyncio.sleep(5)
 
-    async def get_klines(self, symbol, interval='15m', limit=100):
+    async def get_klines(self, symbol, interval='5m', limit=100):
         data = await self._fapi_request('GET', '/fapi/v1/klines', 
             {'symbol': symbol, 'interval': interval, 'limit': limit})
         if data and len(data) > 20:
@@ -336,60 +297,80 @@ class LegendarySniperFuturesV7:
             return df
         return None
 
-    # ═════════════════════ تحليل صيد الحيتان ═════════════════════
+    # ═════════════════════ تحليل صيد الحيتان (Multi-TF + ATR) ═════════════════════
     async def analyze_whale_zone(self, symbol):
-        df = await self.get_klines(symbol, '15m', 100)
-        if df is None or len(df) < 30: return None
+        # ═══ سر القناص: دمج فريم الساعة (للمناطق) وفريم 5 دقائق (للدخول) ═══
+        df_1h = await self.get_klines(symbol, '1h', 100)   # فريم الساعة لرسم خريطة الحيتان
+        df_5m = await self.get_klines(symbol, '5m', 100)   # فريم 5 دقائق لمراقبة الدخول المبكر
+        
+        if df_1h is None or len(df_1h) < 30 or df_5m is None or len(df_5m) < 30: return None
 
         prices = self.live_prices.get(symbol)
         if not prices: return None
 
-        current_price = prices['ask'] # سنستخدم السعر الحالي لمعرفة قربنا من المنطقة
+        current_price = prices['ask']
 
-        # 1. تحديد الاتجاه العام (بسيط وسريع عبر EMA)
-        ema50 = df['close'].ewm(span=50, adjust=False).mean().iloc[-1]
-        trend = 'BUY' if current_price > ema50 else 'SELL'
+        # 1. نحدد الاتجاه من فريم الساعة (الاتجاه الحقيقي)
+        ema50_1h = df_1h['close'].ewm(span=50, adjust=False).mean().iloc[-1]
+        trend = 'BUY' if current_price > ema50_1h else 'SELL'
 
-        # 2. البحث عن مناطق العرض والطلب (Order Blocks)
-        obs = self.smc.detect_order_blocks(df, trend)
+        # 2. نرسم مناطق العرض والطلب من فريم الساعة (مناطق الحيتان الكبرى)
+        obs = self.smc.detect_order_blocks(df_1h, trend)
         if not obs: return None
 
-        # 3. فلترة المنطقة: هل السعر قريب من منطقة حوت؟
-        # نبحث عن منطقة لم تُخترق بعد وقريبة من السعر الحالي (ضمن 1%)
+        # 3. هل السعر قريب من منطقة الحوت؟
         nearby_ob = None
-        for ob in reversed(obs): # آخر منطقة هي الأهم
+        for ob in reversed(obs):
             if trend == 'BUY' and ob['type'] == 'demand':
                 distance_pct = (current_price - ob['top']) / current_price
-                if 0 <= distance_pct <= 0.015: # السعر قريب جداً أو يلامس المنطقة
+                if 0 <= distance_pct <= 0.02: # مسافة 2% لفريم الساعة
                     nearby_ob = ob
                     break
             elif trend == 'SELL' and ob['type'] == 'supply':
                 distance_pct = (ob['bottom'] - current_price) / current_price
-                if 0 <= distance_pct <= 0.015:
+                if 0 <= distance_pct <= 0.02:
                     nearby_ob = ob
                     break
 
         if not nearby_ob: return None
 
-        # 4. كشف تصفية السيولة (Liquidity Sweep) - هذا هو سر الدخول مع الحوت!
-        is_sweep = self.smc.detect_liquidity_sweep(df, nearby_ob, trend)
+        # 4. نبحث عن تصفية السيولة (Sweep) من فريم 5 دقائق (الزناد السريع)
+        is_sweep = self.smc.detect_liquidity_sweep(df_5m, nearby_ob, trend)
         if not is_sweep: return None
 
-        # 5. حساب الدخول والأهداف
+        # ═══ 5. حساب الدخول والأهداف (باستخدام ATR لمواجهة التقلب العنيف) ═══
         entry_price = current_price
+        
+        # حساب ATR لمعرفة متوسط تقلب العملة
+        df_5m['high_low'] = df_5m['high'] - df_5m['low']
+        df_5m['high_close'] = abs(df_5m['high'] - df_5m['close'].shift())
+        df_5m['low_close'] = abs(df_5m['low'] - df_5m['close'].shift())
+        df_5m['tr'] = df_5m[['high_low', 'high_close', 'low_close']].max(axis=1)
+        atr = df_5m['tr'].rolling(14).mean().iloc[-1]
+        
+        # الوقف يجب أن يكون 2 ضعف الـ ATR ليتجاوز ذيول الحيتان (Wicks)
+        sl_buffer = atr * 2.0 
+        
         if trend == 'BUY':
-            sl = nearby_ob['bottom'] * 0.998 # وقف خسارة تحت المنطقة بنسبة ضئيلة جداً
-            tp1 = entry_price * (1 + self.TP1_PCT)
-            tp2 = entry_price * (1 + self.TP2_PCT)
+            sl = nearby_ob['bottom'] - sl_buffer # وقف الخسارة تحت المنطقة بمسافة آمنة
+            tp1 = entry_price + (atr * 1.5)      # الهدف الأول 1.5 ضعف التقلب (Hit & Run)
+            tp2 = entry_price + (atr * 4.0)      # الهدف الثاني للمتابعة
         else:
-            sl = nearby_ob['top'] * 1.002
-            tp1 = entry_price * (1 - self.TP1_PCT)
-            tp2 = entry_price * (1 - self.TP2_PCT)
+            sl = nearby_ob['top'] + sl_buffer
+            tp1 = entry_price - (atr * 1.5)
+            tp2 = entry_price - (atr * 4.0)
+
+        # تحقق ألا تكون نسبة المخاطرة أكبر من المتوقع
+        risk_pct = abs(entry_price - sl) / entry_price * 100
+        if risk_pct > 3.0: # إذا كان الوقف يطلب خسارة أكثر من 3% (75% من الهامش)، ارفض الصفقة
+            return None
 
         return {
             'symbol': symbol, 'direction': trend, 'price': entry_price,
-            'sl': sl, 'tp1': tp1, 'tp2': tp2, 'score': 10, # نقاط مضمونة لأنها دخول حوت
-            'signals_smc': [f"🐋 صيد حوت في منطقة {'طلب' if trend=='BUY' else 'عرض'}", "⚡ تصفية سيولة (فخ للضعفاء)"]
+            'sl': sl, 'tp1': tp1, 'tp2': tp2, 'score': 10,
+            'signals_smc': [f"🐋 صيد حوت في منطقة {'طلب' if trend=='BUY' else 'عرض'}", 
+                           "⚡ تصفية سيولة (فخ للضعفاء)",
+                           f"🛡️ وقف واسع ({risk_pct:.1f}%) لتجنب الذيل"]
         }
 
     # ═════════════════════ التداول للعقود الآجلة ═════════════════════
@@ -400,13 +381,11 @@ class LegendarySniperFuturesV7:
         symbol = analysis['symbol']
         if symbol in self.active_trades: return
 
-        # حساب الكمية بناءً على حجم 10 دولار
         quantity = self.format_quantity(symbol, self.TRADE_SIZE_USDT / analysis['price'])
         if quantity == 0: return
 
         side = 'BUY' if analysis['direction'] == 'BUY' else 'SELL'
 
-        # إرسال أمر الدخول (Market)
         result = await self._fapi_request('POST', '/fapi/v1/order', {
             'symbol': symbol, 'side': side, 'type': 'MARKET', 'quantity': quantity
         }, signed=True)
@@ -415,7 +394,6 @@ class LegendarySniperFuturesV7:
             await self.tg(f"❌ *فشل تنفيذ {side} (`{symbol}`)*\n⚠️ تأكد من إعدادات العقود الآجلة")
             return
 
-        # حفظ الصفقة
         entry_price = float(result.get('avgPrice', analysis['price']))
         
         trade_data = {
@@ -434,7 +412,7 @@ class LegendarySniperFuturesV7:
                f"💵 الدخول: {self.fmt_price(entry_price)}\n"
                f"🛑 وقف الخسارة: {self.fmt_price(analysis['sl'])}\n"
                f"🎯 هدف 1 (Hit & Run): {self.fmt_price(analysis['tp1'])}\n"
-               f"🚀 هدف 2 (متابعة): {self.fmt_price(analysis['tp2'])}\n"
+               f"🚀 هدف 2 (متابعة): {self.fmt_price(ution['tp2'])}\n"
                f"🐋 الاستراتيجية: {'طلب حوتي' if side=='BUY' else 'عرض حوتي'} + تصفية سيولة")
         await self.tg(msg)
 
@@ -449,18 +427,15 @@ class LegendarySniperFuturesV7:
             is_buy = trade['side'] == 'BUY'
             current_price = prices['bid'] if is_buy else prices['ask']
 
-            # تحديث أعلى/أدنى سعر
             if is_buy and current_price > trade.get('highest_price', 0):
                 trade['highest_price'] = current_price
             elif not is_buy and current_price < trade.get('lowest_price', 999999):
                 trade['lowest_price'] = current_price
 
-            # 1. فحص ضرب الوقف
             should_close, reason = False, ""
             if is_buy and current_price <= trade['sl']: should_close, reason = True, "🛑 ضرب SL"
             elif not is_buy and current_price >= trade['sl']: should_close, reason = True, "🛑 ضرب SL"
 
-            # 2. فحص الهدف الأول (جني أرباح سريع - 90% من الكمية لضمان الفوز)
             if not trade.get('partial_closed', False):
                 if (is_buy and current_price >= trade['tp1']) or (not is_buy and current_price <= trade['tp1']):
                     partial_qty = self.format_quantity(symbol, trade['quantity'] * 0.9)
@@ -473,12 +448,10 @@ class LegendarySniperFuturesV7:
                     if res and res.get('status') in ['FILLED', 'NEW']:
                         trade['quantity'] -= partial_qty
                         trade['partial_closed'] = True
-                        # نقل الوقف للدخول (مخاطرة صفر)
                         trade['sl'] = trade['entry_price'] * (1.001) if is_buy else trade['entry_price'] * (0.999)
                         await self.db.save_trade(trade)
-                        await self.tg(f"🎯 *جني أرباط أول (`{symbol}`)*\n💸 تم إغلاق 90% بربح مؤكد!\n🛡️ الوقف نقطة الدخول الآن.")
+                        await self.tg(f"🎯 *جني أرباح أول (`{symbol}`)*\n💸 تم إغلاق 90% بربح مؤكد!\n🛡️ الوقف نقطة الدخول الآن.")
 
-            # 3. وقف متحرك للـ 10% المتبقية (لصيد الموجة الكبيرة)
             if trade.get('partial_closed'):
                 if is_buy:
                     new_sl = trade['highest_price'] * 0.99
@@ -487,7 +460,6 @@ class LegendarySniperFuturesV7:
                     new_sl = trade['lowest_price'] * 1.01
                     if new_sl < trade['sl']: trade['sl'] = new_sl
 
-            # إغلاق نهائي
             if should_close:
                 close_side = 'SELL' if is_buy else 'BUY'
                 res = await self._fapi_request('POST', '/fapi/v1/order', {
@@ -499,7 +471,6 @@ class LegendarySniperFuturesV7:
                 if is_buy: pnl = (fill_price - trade['entry_price']) * trade['quantity']
                 else: pnl = (trade['entry_price'] - fill_price) * trade['quantity']
 
-                # حساب ربح الهامش (بسبب الرافعة 25x)
                 margin_pnl_pct = (pnl / self.TRADE_SIZE_USDT) * 100 
                 is_win = pnl > 0
                 if is_win: self.stats['wins'] += 1
@@ -517,7 +488,6 @@ class LegendarySniperFuturesV7:
 
     # ═════════════════════ المسح السريع للمتقلبات ═════════════════════
     async def scan_volatile_coins(self):
-        # جلب العملات الأكثر تقلباً في آخر 24 ساعة من العقود الآجلة
         tickers = await self._fapi_request('GET', '/fapi/v1/ticker/24hr')
         if not tickers: return
 
@@ -525,20 +495,18 @@ class LegendarySniperFuturesV7:
         for t in tickers:
             symbol = t.get('symbol', '')
             change = abs(float(t.get('priceChangePercent', 0)))
-            # نبحث عن عملات تحركت بشكل عنيف (أكثر من 5% في يوم) - هذه توجد بها مناطق حيتان
             if change > 5 and symbol in self.step_sizes_cache:
                 targets.append({'symbol': symbol, 'change': change})
 
         targets.sort(key=lambda x: x['change'], reverse=True)
         
-        # إضافة العملات المفضلة للمسح
         for coin in self.volatile_targets:
             sym = f"{coin}USDT"
             if sym in self.step_sizes_cache and sym not in [t['symbol'] for t in targets]:
                 targets.append({'symbol': sym, 'change': 0})
 
         results = []
-        for target in targets[:30]: # فحص أفضل 30 عملة متقلبة
+        for target in targets[:20]: # تقليل العدد لتخفيف الضغط على API
             symbol = target['symbol']
             if symbol in self.active_trades: continue
 
@@ -565,7 +533,6 @@ class LegendarySniperFuturesV7:
         await self.load_market_data()
         self.active_trades = await self.db.load_active_trades()
         
-        # إعداد الرافعة للعملات
         await self.setup_futures_account()
         
         asyncio.create_task(self.ws_manager())
@@ -573,11 +540,12 @@ class LegendarySniperFuturesV7:
 
         mode_trade = "⚔️ تداول عقود آجلة تلقائي" if self.TRADE_ENABLED else "👁️ مراقبة فقط"
 
-        msg = ("🔥 *القناص الأسطوري V7.0 — صياد الحيتان!*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        msg = ("🔥 *القناص الأسطوري V7.1 — صياد الحيتان!*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
                f"📡 الوضع: {mode_trade}\n"
                f"⚡ الرافعة: 25x | الهامش: معزول (Isolated)\n"
                f"💰 حجم الصفقة: 10$ ثابت\n"
-               f"🎯 استراتيجية: عرض وطلب + تصفية سيولة (Sweep)\n"
+               f"🎯 استراتيجية: عرض وطلب (1H) + تصفية سيولة (5M)\n"
+               f"🛡️ حماية: وقف خسارة ATR ذكي (مضاد للذيل العشوائي)\n"
                f"🏃 خطة خروج: Hit & Run (90% ربح سريع + 10% وقف متحرك)\n"
                "━━━━━━━━━━━━━━━━━━━━━━━━\n⏰ بدء المسح المتقلب...")
         await self.tg(msg)
@@ -585,13 +553,9 @@ class LegendarySniperFuturesV7:
         try:
             while True:
                 try:
-                    now = time.time()
                     await self.monitor_trades()
-                    
-                    # مسح كل 10 دقائق (لأننا نبحث عن فرص سريعة)
                     await self.scan_volatile_coins()
-                    
-                    await asyncio.sleep(600) # 10 دقائق
+                    await asyncio.sleep(600) # كل 10 دقائق
                 except Exception as loop_err:
                     logger.error(f"خطأ في الحلقة: {loop_err}")
                     await asyncio.sleep(60)
