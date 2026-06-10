@@ -287,16 +287,17 @@ class LegendarySniperFuturesV7:
         return math.floor(qty * (10 ** precision)) / (10 ** precision)
 
     async def ws_manager(self):
-        streams = [f"{sym.lower()}@bookTicker" for sym in self.step_sizes_cache.keys()]
-        ws_url = f"wss://fstream.binance.com/stream?streams={'/'.join(streams[:200])}"
-
+        # استخدام الستريم الشامل !bookTicker لجلب كافة العملات دفعة واحدة
+        ws_url = "wss://fstream.binance.com/ws/!bookTicker"
+        
         while True:
             try:
                 async with websockets.connect(ws_url, ping_interval=20) as ws:
-                    logger.info("✅ Futures WebSocket متصل!")
+                    logger.info("✅ Futures WebSocket متصل بجميع العملات (Global Mode)!")
                     async for message in ws:
-                        data = json.loads(message).get('data', {})
-                        if data.get('e') == 'bookTicker':
+                        data = json.loads(message)
+                        # تنسيق البيانات في الستريم الشامل يختلف قليلاً عن الستريم المخصص
+                        if 's' in data and 'b' in data and 'a' in data:
                             self.live_prices[data['s']] = {
                                 'bid': float(data['b']), 'ask': float(data['a'])
                             }
