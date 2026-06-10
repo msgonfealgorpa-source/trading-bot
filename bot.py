@@ -8,6 +8,7 @@
   ✅ إعادة دمج مؤشر الاستوكاستيك: كروس الزناد على فريم 15 دقيقة في مناطق التشبع
   ✅ إصلاح خطأ التوقيت المنطقي: حذف sleep(600) والاعتماد على فحص كل 60 ثانية
   ✅ إصلاح خطأ الكراش: تصحيح المتغير ution['tp2'] إلى analysis['tp2']
+  ✅ حذف القائمة الثابتة للعملات المتقلبة: الاعتماد على المسح الديناميكي الحي 100%
 ═══════════════════════════════════════════════════════════════════════
 """
 
@@ -192,8 +193,6 @@ class LegendarySniperFuturesV7:
         self.step_sizes_cache = {}
         self.live_prices = {}
         self.active_trades = {}
-        
-        self.volatile_targets = ['BEAT', 'PEOPLE', 'UNFI', 'CELR', 'LIT', 'SFP', 'ALICE', 'ATA', 'MASK', 'ANT']
 
         self.stats = {'total_scans': 0, 'trades_executed': 0, 'wins': 0, 'losses': 0}
 
@@ -530,7 +529,7 @@ class LegendarySniperFuturesV7:
                        f"🏆 الإجمالي: {self.stats['wins']}W / {self.stats['losses']}L")
                 await self.tg(msg)
 
-    # ═════════════════════ المسح السريع للمتقلبات ═════════════════════
+    # ═════════════════════ المسح السريع للمتقلبات (ديناميكي 100%) ═════════════════════
     async def scan_volatile_coins(self):
         tickers = await self._fapi_request('GET', '/fapi/v1/ticker/24hr')
         if not tickers: return
@@ -543,14 +542,9 @@ class LegendarySniperFuturesV7:
                 targets.append({'symbol': symbol, 'change': change})
 
         targets.sort(key=lambda x: x['change'], reverse=True)
-        
-        for coin in self.volatile_targets:
-            sym = f"{coin}USDT"
-            if sym in self.step_sizes_cache and sym not in [t['symbol'] for t in targets]:
-                targets.append({'symbol': sym, 'change': 0})
 
         results = []
-        for target in targets[:20]: # تقليل العدد لتخفيف الضغط على API
+        for target in targets[:20]: # نأخذ أعلى 20 عملة متقلبة حياً بدون أي تدخل يدوي
             symbol = target['symbol']
             if symbol in self.active_trades: continue
 
@@ -591,7 +585,7 @@ class LegendarySniperFuturesV7:
                f"🎯 استراتيجية: اتجاه ماكرو (4H) + عرض وطلب (1H) + تصفية سيولة وكروس استوكاستيك (15M)\n"
                f"🛡️ حماية: وقف خسارة ATR ذكي (مضاد للذيل العشوائي)\n"
                f"🏃 خطة خروج: Hit & Run (90% ربح سريع + 10% وقف متحرك)\n"
-               "━━━━━━━━━━━━━━━━━━━━━━━━\n⏰ بدء المسح المتقلب...")
+               "━━━━━━━━━━━━━━━━━━━━━━━━\n⏰ بدء المسح المتقلب الديناميكي...")
         await self.tg(msg)
 
         try:
