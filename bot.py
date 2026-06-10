@@ -1,12 +1,13 @@
 """
 ═══════════════════════════════════════════════════════════════════════
-  🔥 القناص الأسطوري V7.1 — Legendary Sniper (Multi-TF & ATR Shield) 🔥
+  🔥 القناص الأسطوري V7.2 — Legendary Sniper (Multi-TF & ATR Shield) 🔥
 ═══════════════════════════════════════════════════════════════════════
-  تحديثات V7.1 (التعديلات المطلوبة):
-  ✅ دمج الفريمات: 1 ساعة (لرسم مناطق الحيتان) + 5 دقائق (لزناد الدخول)
-  ✅ وقف الخسارة الديناميكي ATR: حماية من ذيول السيولة (Wicks) في العملات العنيفة
-  ✅ نظام Hit & Run لضمان نسبة ربح عالية جداً
-  ✅ الرافعة 25x وحجم صفقة 10 دولار للعقود الآجلة
+  تحديثات V7.2 (التعديلات المطلوبة):
+  ✅ تعديل الرافعة المالية: تثبيت الرافعة على 10x فقط
+  ✅ دمج الفريمات: 4 ساعات (اتجاه ماكرو) + 1 ساعة (مناطق حيتان) + 15 دقيقة (زناد الدخول)
+  ✅ إعادة دمج مؤشر الاستوكاستيك: كروس الزناد على فريم 15 دقيقة في مناطق التشبع
+  ✅ إصلاح خطأ التوقيت المنطقي: حذف sleep(600) والاعتماد على فحص كل 60 ثانية
+  ✅ إصلاح خطأ الكراش: تصحيح المتغير ution['tp2'] إلى analysis['tp2']
 ═══════════════════════════════════════════════════════════════════════
 """
 
@@ -125,14 +126,14 @@ class WhaleSMCEngine:
         return obs
 
     @staticmethod
-    def detect_liquidity_sweep(df_5m, ob_zone, direction):
+    def detect_liquidity_sweep(df_15m, ob_zone, direction):
         """
-        كشف تصفية السيولة من فريم 5 دقائق (الزناد السريع)
+        كشف تصفية السيولة من فريم 15 دقيقة (الزناد السريع)
         """
-        current_low = df_5m['low'].iloc[-1]
-        current_high = df_5m['high'].iloc[-1]
-        current_close = df_5m['close'].iloc[-1]
-        prev_close = df_5m['close'].iloc[-2]
+        current_low = df_15m['low'].iloc[-1]
+        current_high = df_15m['high'].iloc[-1]
+        current_close = df_15m['close'].iloc[-1]
+        prev_close = df_15m['close'].iloc[-2]
 
         if direction == 'BUY' and ob_zone['type'] == 'demand':
             if current_low < ob_zone['bottom'] and current_close > ob_zone['top'] and current_close > prev_close:
@@ -144,9 +145,29 @@ class WhaleSMCEngine:
                 
         return False
 
+    @staticmethod
+    def calculate_stochastic(df, k_period=14, d_period=3):
+        """
+        حساب مؤشر الاستوكاستيك (Stochastic Oscillator)
+        """
+        low_min = df['low'].rolling(window=k_period).min()
+        high_max = df['high'].rolling(window=k_period).max()
+        
+        # تجنب القسمة على صفر
+        diff = high_max - low_min
+        diff = diff.replace(0, np.nan)
+        
+        df['stoch_k'] = 100 * ((df['close'] - low_min) / diff)
+        df['stoch_d'] = df['stoch_k'].rolling(window=d_period).mean()
+        
+        # تعبئة القيم المفقودة
+        df['stoch_k'] = df['stoch_k'].fillna(50)
+        df['stoch_d'] = df['stoch_d'].fillna(50)
+        return df
+
 
 # ══════════════════════════════════════════════════════════════════════
-#           🔥 القناص الأسطوري V7.1 (Futures Multi-TF) 🔥
+#           🔥 القناص الأسطوري V7.2 (Futures Multi-TF) 🔥
 # ══════════════════════════════════════════════════════════════════════
 class LegendarySniperFuturesV7:
     def __init__(self):
@@ -156,7 +177,7 @@ class LegendarySniperFuturesV7:
         self.binance_api_secret = os.environ.get('BINANCE_API_SECRET', '')
 
         self.TRADE_ENABLED = os.environ.get('TRADE_ENABLED', 'false').lower() == 'true'
-        self.LEVERAGE = 25
+        self.LEVERAGE = 10  # تعديل الرافعة المالية إلى 10x
         self.TRADE_SIZE_USDT = 10.0
         self.MAX_OPEN_TRADES = 5
 
@@ -225,7 +246,7 @@ class LegendarySniperFuturesV7:
         return None
 
     async def setup_futures_account(self):
-        msg = "⚙️ *إعداد حساب العقود الآجلة (الرافعة 25x)*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        msg = f"⚙️ *إعداد حساب العقود الآجلة (الرافعة 10x)*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
         setup_count = 0
         
         for pair in self.all_futures_pairs[:50]: # نضبط أهم 50 زوج لتسريع البوت
@@ -243,7 +264,7 @@ class LegendarySniperFuturesV7:
                 pass
             await asyncio.sleep(0.15)
             
-        msg += f"✅ تم ضبط الرافعة 25x والهامش المعزول لـ {setup_count} زوج"
+        msg += f"✅ تم ضبط الرافعة 10x والهامش المعزول لـ {setup_count} زوج"
         await self.tg(msg)
 
     async def load_market_data(self):
@@ -284,7 +305,7 @@ class LegendarySniperFuturesV7:
                 logger.error(f"❌ خطأ WebSocket: {str(e)[:50]}")
                 await asyncio.sleep(5)
 
-    async def get_klines(self, symbol, interval='5m', limit=100):
+    async def get_klines(self, symbol, interval='15m', limit=100):
         data = await self._fapi_request('GET', '/fapi/v1/klines', 
             {'symbol': symbol, 'interval': interval, 'limit': limit})
         if data and len(data) > 20:
@@ -297,22 +318,24 @@ class LegendarySniperFuturesV7:
             return df
         return None
 
-    # ═════════════════════ تحليل صيد الحيتان (Multi-TF + ATR) ═════════════════════
+    # ═════════════════════ تحليل صيد الحيتان (Multi-TF + ATR + Stochastic) ═════════════════════
     async def analyze_whale_zone(self, symbol):
-        # ═══ سر القناص: دمج فريم الساعة (للمناطق) وفريم 5 دقائق (للدخول) ═══
-        df_1h = await self.get_klines(symbol, '1h', 100)   # فريم الساعة لرسم خريطة الحيتان
-        df_5m = await self.get_klines(symbol, '5m', 100)   # فريم 5 دقائق لمراقبة الدخول المبكر
+        # ═══ سر القناص: دمج 3 فريمات (4H للاتجاه، 1H للمناطق، 15M للزناد) ═══
+        df_4h = await self.get_klines(symbol, '4h', 100)   # فريم 4 ساعات لتحديد الاتجاه العام (الماكرو)
+        df_1h = await self.get_klines(symbol, '1h', 100)   # فريم الساعة لرسم خريطة الحيتان (Order Blocks)
+        df_15m = await self.get_klines(symbol, '15m', 100) # فريم 15 دقيقة لاستخراج زناد الدخول الفعلي
         
-        if df_1h is None or len(df_1h) < 30 or df_5m is None or len(df_5m) < 30: return None
+        if df_4h is None or len(df_4h) < 30 or df_1h is None or len(df_1h) < 30 or df_15m is None or len(df_15m) < 30: 
+            return None
 
         prices = self.live_prices.get(symbol)
         if not prices: return None
 
         current_price = prices['ask']
 
-        # 1. نحدد الاتجاه من فريم الساعة (الاتجاه الحقيقي)
-        ema50_1h = df_1h['close'].ewm(span=50, adjust=False).mean().iloc[-1]
-        trend = 'BUY' if current_price > ema50_1h else 'SELL'
+        # 1. نحدد الاتجاه من فريم الـ 4 ساعات (الاتجاه الماكرو الحقيقي)
+        ema50_4h = df_4h['close'].ewm(span=50, adjust=False).mean().iloc[-1]
+        trend = 'BUY' if current_price > ema50_4h else 'SELL'
 
         # 2. نرسم مناطق العرض والطلب من فريم الساعة (مناطق الحيتان الكبرى)
         obs = self.smc.detect_order_blocks(df_1h, trend)
@@ -334,19 +357,39 @@ class LegendarySniperFuturesV7:
 
         if not nearby_ob: return None
 
-        # 4. نبحث عن تصفية السيولة (Sweep) من فريم 5 دقائق (الزناد السريع)
-        is_sweep = self.smc.detect_liquidity_sweep(df_5m, nearby_ob, trend)
+        # 4. نبحث عن تصفية السيولة (Sweep) من فريم 15 دقيقة (الزناد السريع)
+        is_sweep = self.smc.detect_liquidity_sweep(df_15m, nearby_ob, trend)
         if not is_sweep: return None
 
-        # ═══ 5. حساب الدخول والأهداف (باستخدام ATR لمواجهة التقلب العنيف) ═══
+        # 5. التأكيد النهائي بكروس الاستوكاستيك على فريم 15 دقيقة
+        df_15m = self.smc.calculate_stochastic(df_15m)
+        
+        current_k = df_15m['stoch_k'].iloc[-1]
+        prev_k = df_15m['stoch_k'].iloc[-2]
+        current_d = df_15m['stoch_d'].iloc[-1]
+        prev_d = df_15m['stoch_d'].iloc[-2]
+        
+        stoch_confirmed = False
+        if trend == 'BUY':
+            # كروس صعودي في منطقة التشبع البيعي (أقل من 20)
+            if current_k > current_d and prev_k <= prev_d and current_k < 20:
+                stoch_confirmed = True
+        elif trend == 'SELL':
+            # كروس هبوطي في منطقة التشبع الشرائي (أعلى من 80)
+            if current_k < current_d and prev_k >= prev_d and current_k > 80:
+                stoch_confirmed = True
+                
+        if not stoch_confirmed: return None
+
+        # ═══ 6. حساب الدخول والأهداف (باستخدام ATR لمواجهة التقلب العنيف) ═══
         entry_price = current_price
         
-        # حساب ATR لمعرفة متوسط تقلب العملة
-        df_5m['high_low'] = df_5m['high'] - df_5m['low']
-        df_5m['high_close'] = abs(df_5m['high'] - df_5m['close'].shift())
-        df_5m['low_close'] = abs(df_5m['low'] - df_5m['close'].shift())
-        df_5m['tr'] = df_5m[['high_low', 'high_close', 'low_close']].max(axis=1)
-        atr = df_5m['tr'].rolling(14).mean().iloc[-1]
+        # حساب ATR لمعرفة متوسط تقلب العملة من فريم 15 دقيقة
+        df_15m['high_low'] = df_15m['high'] - df_15m['low']
+        df_15m['high_close'] = abs(df_15m['high'] - df_15m['close'].shift())
+        df_15m['low_close'] = abs(df_15m['low'] - df_15m['close'].shift())
+        df_15m['tr'] = df_15m[['high_low', 'high_close', 'low_close']].max(axis=1)
+        atr = df_15m['tr'].rolling(14).mean().iloc[-1]
         
         # الوقف يجب أن يكون 2 ضعف الـ ATR ليتجاوز ذيول الحيتان (Wicks)
         sl_buffer = atr * 2.0 
@@ -362,7 +405,7 @@ class LegendarySniperFuturesV7:
 
         # تحقق ألا تكون نسبة المخاطرة أكبر من المتوقع
         risk_pct = abs(entry_price - sl) / entry_price * 100
-        if risk_pct > 3.0: # إذا كان الوقف يطلب خسارة أكثر من 3% (75% من الهامش)، ارفض الصفقة
+        if risk_pct > 3.0: # إذا كان الوقف يطلب خسارة أكثر من 3% (30% من الهامش مع رافعة 10x)، ارفض الصفقة
             return None
 
         return {
@@ -370,6 +413,7 @@ class LegendarySniperFuturesV7:
             'sl': sl, 'tp1': tp1, 'tp2': tp2, 'score': 10,
             'signals_smc': [f"🐋 صيد حوت في منطقة {'طلب' if trend=='BUY' else 'عرض'}", 
                            "⚡ تصفية سيولة (فخ للضعفاء)",
+                           f"📈 كروس استوكاستك مؤكد على 15M",
                            f"🛡️ وقف واسع ({risk_pct:.1f}%) لتجنب الذيل"]
         }
 
@@ -408,12 +452,12 @@ class LegendarySniperFuturesV7:
         self.stats['trades_executed'] += 1
 
         msg = (f"✅ *صفقة عقود آجلة منفذة!*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
-               f"🪙 الزوج: `{symbol}` | الرافعة: 25x\n"
+               f"🪙 الزوج: `{symbol}` | الرافعة: 10x\n"
                f"💵 الدخول: {self.fmt_price(entry_price)}\n"
                f"🛑 وقف الخسارة: {self.fmt_price(analysis['sl'])}\n"
                f"🎯 هدف 1 (Hit & Run): {self.fmt_price(analysis['tp1'])}\n"
-               f"🚀 هدف 2 (متابعة): {self.fmt_price(ution['tp2'])}\n"
-               f"🐋 الاستراتيجية: {'طلب حوتي' if side=='BUY' else 'عرض حوتي'} + تصفية سيولة")
+               f"🚀 هدف 2 (متابعة): {self.fmt_price(analysis['tp2'])}\n"
+               f"🐋 الاستراتيجية: {'طلب حوتي' if side=='BUY' else 'عرض حوتي'} + تصفية سيولة + كروس استوكاستك")
         await self.tg(msg)
 
     # ═════════════════════ مراقبة الصفقات (Hit & Run) ═════════════════════
@@ -540,11 +584,11 @@ class LegendarySniperFuturesV7:
 
         mode_trade = "⚔️ تداول عقود آجلة تلقائي" if self.TRADE_ENABLED else "👁️ مراقبة فقط"
 
-        msg = ("🔥 *القناص الأسطوري V7.1 — صياد الحيتان!*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        msg = ("🔥 *القناص الأسطوري V7.2 — صياد الحيتان!*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
                f"📡 الوضع: {mode_trade}\n"
-               f"⚡ الرافعة: 25x | الهامش: معزول (Isolated)\n"
+               f"⚡ الرافعة: 10x | الهامش: معزول (Isolated)\n"
                f"💰 حجم الصفقة: 10$ ثابت\n"
-               f"🎯 استراتيجية: عرض وطلب (1H) + تصفية سيولة (5M)\n"
+               f"🎯 استراتيجية: اتجاه ماكرو (4H) + عرض وطلب (1H) + تصفية سيولة وكروس استوكاستيك (15M)\n"
                f"🛡️ حماية: وقف خسارة ATR ذكي (مضاد للذيل العشوائي)\n"
                f"🏃 خطة خروج: Hit & Run (90% ربح سريع + 10% وقف متحرك)\n"
                "━━━━━━━━━━━━━━━━━━━━━━━━\n⏰ بدء المسح المتقلب...")
@@ -555,10 +599,10 @@ class LegendarySniperFuturesV7:
                 try:
                     await self.monitor_trades()
                     await self.scan_volatile_coins()
-                    await asyncio.sleep(600) # كل 10 دقائق
+                    await asyncio.sleep(60) # فحص السوق كل 60 ثانية كحد أقصى لتوافق مع إغلاق شموع 15M
                 except Exception as loop_err:
                     logger.error(f"خطأ في الحلقة: {loop_err}")
-                    await asyncio.sleep(60)
+                    await asyncio.sleep(15)
         finally:
             await self.session.close()
 
