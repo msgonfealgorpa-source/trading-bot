@@ -1,7 +1,6 @@
 aiohttp
 pandas
 numpy
-ta
 websockets
 requests
 aiosqlite
