@@ -235,8 +235,8 @@ class LegendarySniperFuturesV7:
 
         self.TRADE_ENABLED = os.environ.get('TRADE_ENABLED', 'false').lower() == 'true'
         self.LEVERAGE = 10  # الرافعة المالية ثابتة 10x
-        self.TRADE_SIZE_USDT = 10.0  # ✅ V7.4: الهامش لكل صفقة (× رافعة 10x = نوشنال 100$)
-        self.MAX_OPEN_TRADES = 5
+        # ✅ V7.5: حجم الهامش وعدد الصفقات المتزامنة كمتغيرات بيئة (تُعدَّل من لوحة Zeabur بلا كود)
+        self.TRADE_SIZE_USDT = float(os.environ.get('TRADE_SIZE_USDT', '25'))  # هامش 25$ → نوشنال 250$         self.MAX_OPEN_TRADES = int(os.environ.get('MAX_OPEN_TRADES', '1'))     # صفقة واحدة متزامنة فقط
 
         # ✅ ثوابت حماية تشغيلية (ليست إعدادات استراتيجية)
         self.PRICE_MAX_AGE = 30          # تجاهل أسعار الويب سوكت الأقدم من 30 ثانية
@@ -615,7 +615,7 @@ class LegendarySniperFuturesV7:
         msg = (f"✅ *صفقة عقود آجلة منفذة!*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
                f"🪙 الزوج: `{symbol}` | الرافعة: 10x\n"
                f"💵 الدخول: {self.fmt_price(entry_price)}\n"
-               f"💰 القيمة: 100$ (هامش 10$)\n"
+               f"💰 القيمة: {self.TRADE_SIZE_USDT * self.LEVERAGE:.0f}$ (هامش {self.TRADE_SIZE_USDT:.0f}$)\n"
                f"🛑 وقف الخسارة: {self.fmt_price(analysis['sl'])}\n"
                f"🎯 هدف 1 (Hit & Run): {self.fmt_price(analysis['tp1'])}\n"
                f"🚀 هدف 2 (متابعة): {self.fmt_price(analysis['tp2'])}\n"
@@ -955,7 +955,8 @@ class LegendarySniperFuturesV7:
         msg = ("🔥 *القناص الأسطوري V7.4 — صياد الحيتان!*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
                f"📡 الوضع: {mode_trade}\n"
                f"⚡ الرافعة: 10x | الهامش: معزول (Isolated)\n"
-               f"💰 هامش الصفقة: 10$ × رافعة 10x = قيمة دخول 100$\n"
+               f"💰 هامش الصفقة: {self.TRADE_SIZE_USDT:.0f}$ × رافعة {self.LEVERAGE}x = قيمة دخول {self.TRADE_SIZE_USDT * self.LEVERAGE:.0f}$\n"
+               f"🧲 النمط: صفقة واحدة متزامنة فقط — التالية بعد إغلاق الحالية\n"
                f"🎯 استراتيجية: اتجاه ماكرو (4H) + عرض وطلب (1H) + تصفية سيولة وكروس استوكاستيك (15M)\n"
                f"🛡️ حماية: وقف ATR ذكي + ستوب مزدوج (محلي + على المنصة)\n"
                f"🏃 خطة خروج: Hit & Run (90% ربح سريع + 10% وقف متحرك)\n"
