@@ -162,7 +162,7 @@ class DatabaseManager:
 
 # ═══════════════════════ محرك SMC - صياد الحيتان ═════════════════════
 class WhaleSMCEngine:
-        @staticmethod
+    @staticmethod
     def detect_order_blocks(df, trend):
         obs = []
         threshold = 0.015 # الدفع العنيف 1.5%
