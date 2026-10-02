@@ -626,7 +626,9 @@ class LegendarySniperFuturesV8:
 
     # ═══ WebSocket ═══
     async def ws_manager(self):
-        ws_url = "wss://fstream.binance.com/ws/!bookTicker"
+        # ✅ إصلاح 1: الستريم يتبع الوضع — Testnet يستقبل أسعار Testnet نفسها
+        ws_url = ("wss://stream.binancefuture.com/ws/!bookTicker" if self.TESTNET
+                  else "wss://fstream.binance.com/ws/!bookTicker")
         while True:
             try:
                 async with websockets.connect(ws_url, ping_interval=20) as ws:
