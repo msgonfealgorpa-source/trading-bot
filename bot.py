@@ -831,12 +831,13 @@ class LegendarySniperFuturesV8:
             'symbol': symbol, 'side': side, 'entry_price': entry_price,
             'quantity': quantity, 'sl': analysis['sl'], 'tp': analysis['tp1'],
             'tp2': analysis['tp2'],
+            'score': analysis.get('score'),   # ✅ إصلاح 3: يُعرض في رسالة الإغلاق
             'trailing_active': False, 'highest_price': entry_price,
             'lowest_price': entry_price, 'entry_time': time.time(),
             'partial_closed': False, 'realized_pnl': 0.0,
             'stop_order_id': None, 'tp_order_id': None,
             'stop_synced_price': None, 'tp_skipped': False
-        }
+            }
         self.active_trades[symbol] = trade_data
         await self.db.save_trade(trade_data)
         self.stats['trades_executed'] += 1
