@@ -1287,12 +1287,21 @@ class LegendarySniperFuturesV8:
             for symbol, pos in open_pos.items():
                 if symbol in self.active_trades:
                     continue
+                side = 'BUY' if pos['amt'] > 0 else 'SELL'
+                entry = pos['entry'] or (self.live_prices.get(symbol, {}).get('bid', 0))
+
+                # ✅ إصلاح 2: لا تتبنَّ مركزاً بسعر دخول غير صالح (0 أو أقل)
+                # التبنّي المتأخر أفضل من تبنٍّ فاسد — ستُعاد المحاولة في إقلاع قادم
+                if not entry or entry <= 0:
+                    await self.tg(f"⚠️ *تعذّر تبنّي مركز يتيم* (`{symbol}`)\n"
+                                  f"سعر الدخول غير متاح بعد — سيُعاد في إعادة تشغيل قادمة")
+                    continue
+
                 df = await self.get_klines(symbol, '15m', 50)
                 atr = self._compute_atr(df) if df is not None else None
                 if not atr or atr <= 0 or math.isnan(atr):
-                    atr = pos['entry'] * 0.01
-                side = 'BUY' if pos['amt'] > 0 else 'SELL'
-                entry = pos['entry'] or (self.live_prices.get(symbol, {}).get('bid', 0))
+                    atr = entry * 0.01   # احتياط: 1% من سعر صالح (وليس من صفر)
+
                 if side == 'BUY':
                     sl, tp1, tp2 = entry - 2*atr, entry + 1.5*atr, entry + 4*atr
                 else:
