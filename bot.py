@@ -415,7 +415,7 @@ class LegendarySniperFuturesV8:
         elif price < 100: return f"${price:.2f}"
         else: return f"${price:,.1f}"
 
-   async def tg(self, msg):
+    async def tg(self, msg):
         """✅ V8.1: كل إشعار يذهب للوحة بدل تلغرام — لا تغيير في أماكن الاستدعاء"""
         try:
             first_line = msg.split('\n')[0].replace('*', '').strip()
