@@ -326,8 +326,6 @@ class WhaleSMCEngine:
 # ══════════════════════════════════════════════════════════════════════
 class LegendarySniperFuturesV8:
     def __init__(self):
-        self.tg_token = os.environ.get('TELEGRAM_TOKEN', '')
-        self.tg_chat = os.environ.get('CHAT_ID', '')
         self.binance_api_key = os.environ.get('BINANCE_API_KEY', '')
         self.binance_api_secret = os.environ.get('BINANCE_API_SECRET', '')
 
