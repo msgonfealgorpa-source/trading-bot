@@ -1324,6 +1324,8 @@ class LegendarySniperFuturesV8:
     async def main_loop(self):
         self.session = aiohttp.ClientSession()
         try:
+            # ✅ V8.1: لوحة العمليات — بديل تلغرام الكامل
+            await start_web_panel(self)
             loop = asyncio.get_running_loop()
             for sig_name in ('SIGINT', 'SIGTERM'):
                 try:
