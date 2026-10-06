@@ -417,14 +417,20 @@ class LegendarySniperFuturesV8:
         elif price < 100: return f"${price:.2f}"
         else: return f"${price:,.1f}"
 
-    async def tg(self, msg):
+   async def tg(self, msg):
+        """✅ V8.1: كل إشعار يذهب للوحة بدل تلغرام — لا تغيير في أماكن الاستدعاء"""
         try:
-            if not self.session or not self.tg_token: return
-            await self.session.post(
-                f"https://api.telegram.org/bot{self.tg_token}/sendMessage",
-                data={'chat_id': self.tg_chat, 'text': msg, 'parse_mode': 'Markdown'}, timeout=10)
-        except Exception as e:
-            logger.warning(f"تعذر إرسال رسالة تلغرام: {e}")
+            first_line = msg.split('\n')[0].replace('*', '').strip()
+            kind = 'info'
+            if msg.startswith('✅') or 'صفقة منفذة' in msg: kind = 'trade'
+            elif msg.startswith('🎯') or 'جني' in first_line: kind = 'partial'
+            elif msg.startswith('🏁') or 'إغلاق' in first_line: kind = 'close'
+            elif msg.startswith('🚨') or 'خطأ' in first_line or msg.startswith('⚠️'): kind = 'error'
+            elif 'المطوّر' in first_line or msg.startswith('🧠'): kind = 'tuner'
+            elif msg.startswith('🛑'): kind = 'system'
+            await panel_notify(kind, first_line, msg, 'info')
+        except Exception:
+            pass
 
     # ═══ توقيت الخادم (علاج خطأ -1021 الشهير) ═══
     async def sync_server_time(self):
