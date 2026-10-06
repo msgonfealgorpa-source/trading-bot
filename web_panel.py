@@ -310,6 +310,35 @@ async function login(){
   const k = document.getElementById('adminKey').value.trim();
   if(!k) return;
   KEY = k;
+  const errBox = document.getElementById('loginError');
+  // 1️⃣ نختبر المفتاح على أخف نقطة نهاية (لا تلمس Binance أبداً)
+  try{
+    const test = await fetch('/api/errors', {headers:{'x-admin-key': KEY}});
+    if(test.status === 401){
+      errBox.textContent = 'مفتاح الوصول غير صحيح';
+      errBox.style.display='block';
+      KEY='';
+      return;
+    }
+    if(!test.ok){
+      errBox.textContent = 'خطأ من الخادم (' + test.status + ') — حاول مجدداً';
+      errBox.style.display='block';
+      return;
+    }
+  }catch(e){
+    errBox.textContent = 'تعذر الاتصال بالخادم — تحقق من الإنترنت وحاول مجدداً';
+    errBox.style.display='block';
+    return;
+  }
+  // 2️⃣ المفتاح صحيح ✓ — ندخل فوراً (بلا انتظار Binance)
+  localStorage.setItem('sniper_admin_key', KEY);
+  document.getElementById('loginOverlay').classList.add('hidden');
+  document.getElementById('mainContent').classList.remove('hidden');
+  errBox.style.display='none';
+  if(!timer) timer = setInterval(loadAll, 10000);
+  // 3️⃣ نحمّل البيانات في الخلفية — فشلها لا يعيدنا لشاشة الدخول
+  loadAll().catch(e=>console.log('تحميل أولي:', e));
+}
   try{
     await loadAll();
     localStorage.setItem('sniper_admin_key', KEY);
