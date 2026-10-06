@@ -517,7 +517,11 @@ async function closeAll(){
   alert('تم إغلاق: ' + (r.closed.length ? r.closed.join(', ') : 'لا شيء كان مفتوحاً'));
   loadAll();
 }
-if(KEY){ login(); }
+if(KEY){
+  fetch('/api/errors', {headers:{'x-admin-key': KEY}})
+    .then(r=>{ if(r.ok) login(); else { KEY=''; localStorage.removeItem('sniper_admin_key'); } })
+    .catch(()=>{});
+}
 document.getElementById('adminKey').addEventListener('keydown', e=>{ if(e.key==='Enter') login(); });
 </script>
 </body>
