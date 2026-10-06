@@ -311,7 +311,6 @@ async function login(){
   if(!k) return;
   KEY = k;
   const errBox = document.getElementById('loginError');
-  // 1️⃣ نختبر المفتاح على أخف نقطة نهاية (لا تلمس Binance أبداً)
   try{
     const test = await fetch('/api/errors', {headers:{'x-admin-key': KEY}});
     if(test.status === 401){
@@ -330,33 +329,19 @@ async function login(){
     errBox.style.display='block';
     return;
   }
-  // 2️⃣ المفتاح صحيح ✓ — ندخل فوراً (بلا انتظار Binance)
   localStorage.setItem('sniper_admin_key', KEY);
   document.getElementById('loginOverlay').classList.add('hidden');
   document.getElementById('mainContent').classList.remove('hidden');
   errBox.style.display='none';
   if(!timer) timer = setInterval(loadAll, 10000);
-  // 3️⃣ نحمّل البيانات في الخلفية — فشلها لا يعيدنا لشاشة الدخول
   loadAll().catch(e=>console.log('تحميل أولي:', e));
-}
-  try{
-    await loadAll();
-    localStorage.setItem('sniper_admin_key', KEY);
-    document.getElementById('loginOverlay').classList.add('hidden');
-    document.getElementById('mainContent').classList.remove('hidden');
-    document.getElementById('loginError').style.display='none';
-    if(!timer) timer = setInterval(loadAll, 10000);
-  }catch(e){
-    document.getElementById('loginError').style.display='block';
-    KEY='';
-  }
 }
 function money(v){return (v>=0?'+':'') + '$' + Math.abs(v).toFixed(2)}
 function sign(v,d=1){return (v>=0?'+':'') + v.toFixed(d)}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')}
 
 const KIND_MAP = {
-  trade:{cls:'trade',icon:'🟢',}, partial:{cls:'partial',icon:'🎯'},
+  trade:{cls:'trade',icon:'🟢'}, partial:{cls:'partial',icon:'🎯'},
   close:{cls:'close',icon:'🏁'}, error:{cls:'error',icon:'🚨'},
   tuner:{cls:'tuner',icon:'🧠'}, info:{cls:'info',icon:'ℹ️'},
   system:{cls:'info',icon:'⚙️'}
@@ -387,7 +372,6 @@ async function loadAll(){
   document.getElementById('liveBadge').className = 'badge' + (live?'':' off');
   document.getElementById('liveTxt').textContent = live ? 'البوت حي ✓' : 'توقف تدفق الأسعار!';
 
-  /* الحمايات */
   const hb = document.getElementById('healthBox');
   hb.innerHTML = [
     ['تدفق الأسعار', live ? 'متصل ✓' : 'متوقف '+ov.price_age+'ث', live?'ok':'bad'],
@@ -396,12 +380,10 @@ async function loadAll(){
     ['وضع التشغيل', mode, ov.trade_enabled?'ok':'warn'],
   ].map(([n,s,c])=>'<div class="health-item"><div class="h-dot '+c+'"></div><div><div class="h-name">'+n+'</div><div class="h-status">'+s+'</div></div></div>').join('');
 
-  /* الصفقات المفتوحة (نظرة عامة + تبويب الصفقات) */
   const tr = await api('/api/trades');
   renderOpenTrades(tr, 'openTradesBox');
   renderOpenTrades(tr, 'tradesOpenBox');
 
-  /* المغلقة */
   const cl = await api('/api/closed');
   const cb = document.getElementById('tradesClosedBox');
   if(!cl.length){ cb.innerHTML = '<div class="empty">لا صفقات مغلقة بعد</div>'; }
@@ -417,7 +399,6 @@ async function loadAll(){
     cb.innerHTML = h + '</table>';
   }
 
-  /* الإشارات */
   const sig = await api('/api/signals');
   const sb = document.getElementById('signalsBox');
   if(!sig.length){ sb.innerHTML = '<div class="empty">القناص يراقب — لا إشارات بعد</div>'; }
@@ -436,13 +417,12 @@ async function loadAll(){
     sb.innerHTML = h + '</table>';
   }
 
-  /* الإشعارات */
   const nf = await api('/api/notifications?after='+lastNotifId);
   if(nf.items && nf.items.length){
     lastNotifId = nf.last_id || lastNotifId;
     document.getElementById('notifCount').textContent = nf.total_unread || nf.items.length;
     const feed = document.getElementById('notifFeed');
-    const live = document.getElementById('liveFeed');
+    const liveF = document.getElementById('liveFeed');
     let html = '';
     nf.items.forEach(n=>{
       const k = KIND_MAP[n.kind] || KIND_MAP.info;
@@ -453,12 +433,11 @@ async function loadAll(){
       html += item;
     });
     feed.innerHTML = html + feed.innerHTML;
-    live.innerHTML = html + live.innerHTML;
-    while(live.children.length > 15) live.removeChild(live.lastChild);
+    liveF.innerHTML = html + liveF.innerHTML;
+    while(liveF.children.length > 15) liveF.removeChild(liveF.lastChild);
     while(feed.children.length > 100) feed.removeChild(feed.lastChild);
   }
 
-  /* المطوّر */
   const tu = ov.tuner;
   document.getElementById('tunerState').innerHTML =
     '<div class="kv"><span>الحد الأدنى للتقييم</span><b>'+tu.min_score+' / 8</b></div>'
@@ -473,14 +452,12 @@ async function loadAll(){
     bar.innerHTML = hist.map(w=>'<div class="score-seg" style="flex:1;background:'+(w?'#10b981':'#ef4444')+'"></div>').join('');
   } else { th.innerHTML = '<div class="empty">لا نتائج بعد</div>'; bar.innerHTML=''; }
 
-  /* الأخطاء */
   const er = await api('/api/errors');
   const eb = document.getElementById('errorsBox');
   const ekeys = Object.keys(er.errors||{});
   if(!ekeys.length){ eb.innerHTML = '<div class="empty" style="padding:20px">✅ لا أخطاء — كل شيء يعمل بنقاء</div>'; }
   else{ eb.innerHTML = ekeys.map(k=>'<div class="kv"><span>'+esc(k)+'</span><b style="color:var(--orange)">تكرار ×'+er.errors[k]+'</b></div>').join(''); }
 
-  /* الإعدادات */
   document.getElementById('settingsBox').innerHTML =
     '<div class="kv"><span>وضع التشغيل</span><b>'+mode+'</b></div>'
     + '<div class="kv"><span>Testnet (تجريبي)</span><b>'+(ov.testnet?'🧪 نعم':'لا — أموال حقيقية')+'</b></div>'
