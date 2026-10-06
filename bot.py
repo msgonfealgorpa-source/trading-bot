@@ -35,6 +35,7 @@ from urllib.parse import urlencode
 from logging.handlers import RotatingFileHandler
 import websockets
 import aiosqlite
+from web_panel import start_web_panel, notify as panel_notify
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
