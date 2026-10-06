@@ -46,43 +46,6 @@ fh = RotatingFileHandler('bot_v8.log', maxBytes=2*1024*1024, backupCount=2, enco
 fh.setFormatter(fmt); logger.addHandler(fh)
 ch = logging.StreamHandler(); ch.setFormatter(fmt); logger.addHandler(ch)
 
-
-class TelegramLoggingHandler(logging.Handler):
-    """معالج أخطاء تلغرام مع صمام خنق (رسالة كل 5 دقائق لنفس المصدر)"""
-    THROTTLE_SECONDS = 300
-
-    def __init__(self):
-        super().__init__()
-        self._last_sent = {}
-
-    def emit(self, record):
-        try:
-            if record.levelno >= logging.ERROR:
-                tok = os.environ.get('TELEGRAM_TOKEN', '')
-                cid = os.environ.get('CHAT_ID', '')
-                if tok and cid:
-                    key = (record.module, record.lineno)
-                    now = time.time()
-                    if now - self._last_sent.get(key, 0) < self.THROTTLE_SECONDS:
-                        return
-                    self._last_sent[key] = now
-                    msg_text = f"🚨 *خطأ:*\n```\n{self.format(record)[:400]}\n```"
-                    url = f"https://api.telegram.org/bot{tok}/sendMessage"
-                    threading.Thread(target=self._send, args=(url, cid, msg_text), daemon=True).start()
-        except Exception:
-            pass
-
-    def _send(self, url, cid, msg_text):
-        try:
-            requests.post(url, data={'chat_id': cid, 'text': msg_text, 'parse_mode': 'Markdown'}, timeout=5)
-        except Exception:
-            pass
-
-tg_handler = TelegramLoggingHandler()
-tg_handler.setLevel(logging.ERROR)
-logger.addHandler(tg_handler)
-
-
 # ═══════════════════════ قاعدة البيانات ═════════════════════
 class DatabaseManager:
     def __init__(self, db_name='sniper_v8.db'):
