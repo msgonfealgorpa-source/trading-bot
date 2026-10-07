@@ -1,6 +1,7 @@
 """
 🔥 لوحة تحكم القناص — V8.1 (شاشة العمليات الكاملة — بلا تلغرام)
 كل ما يفعله البوت يُعرض هنا: إشعارات حية، صفقات، إشارات، أخطاء، مطوّر
+✅ إصلاحات: strip للمفتاح (مسافات خفية) + Auto-Login بالمفتاح المحفوظ
 """
 
 import os
@@ -158,7 +159,7 @@ tr:hover td{background:rgba(0,212,170,.03)}
   <div class="login-box">
     <h2>🎯 القناص الأسطوري</h2>
     <p>شاشة العمليات الكاملة — أدخل مفتاح الوصول</p>
-    <input type="password" class="login-input" id="adminKey" placeholder="ADMIN_KEY">
+    <input type="password" class="login-input" id="adminKey" placeholder="ADMIN_KEY" autocomplete="off">
     <button class="login-btn" onclick="login()">دخول</button>
     <div class="login-error" id="loginError">مفتاح الوصول غير صحيح</div>
   </div>
@@ -306,35 +307,37 @@ function showLogin(){
   document.getElementById('loginOverlay').classList.remove('hidden');
   document.getElementById('mainContent').classList.add('hidden');
 }
-async function login(){
-  const k = document.getElementById('adminKey').value.trim();
+async function login(forcedKey = null){
+  const inputEl = document.getElementById('adminKey');
+  const k = (forcedKey && String(forcedKey).trim()) || (inputEl ? inputEl.value.trim() : '');
   if(!k) return;
   KEY = k;
   const errBox = document.getElementById('loginError');
   try{
     const test = await fetch('/api/errors', {headers:{'x-admin-key': KEY}});
     if(test.status === 401){
-      errBox.textContent = 'مفتاح الوصول غير صحيح';
-      errBox.style.display='block';
+      if(!forcedKey && errBox){
+        errBox.textContent = 'مفتاح الوصول غير صحيح';
+        errBox.style.display='block';
+      }
       KEY='';
+      localStorage.removeItem('sniper_admin_key');
       return;
     }
     if(!test.ok){
-      errBox.textContent = 'خطأ من الخادم (' + test.status + ') — حاول مجدداً';
-      errBox.style.display='block';
+      if(errBox){ errBox.textContent = 'خطأ من الخادم (' + test.status + ')'; errBox.style.display='block'; }
       return;
     }
   }catch(e){
-    errBox.textContent = 'تعذر الاتصال بالخادم — تحقق من الإنترنت وحاول مجدداً';
-    errBox.style.display='block';
+    if(errBox){ errBox.textContent = 'تعذر الاتصال — تحقق من الإنترنت'; errBox.style.display='block'; }
     return;
   }
   localStorage.setItem('sniper_admin_key', KEY);
   document.getElementById('loginOverlay').classList.add('hidden');
   document.getElementById('mainContent').classList.remove('hidden');
-  errBox.style.display='none';
+  if(errBox) errBox.style.display='none';
   if(!timer) timer = setInterval(loadAll, 10000);
-  loadAll().catch(e=>console.log('تحميل أولي:', e));
+  loadAll().catch(e=>console.log(e));
 }
 function money(v){return (v>=0?'+':'') + '$' + Math.abs(v).toFixed(2)}
 function sign(v,d=1){return (v>=0?'+':'') + v.toFixed(d)}
@@ -494,11 +497,7 @@ async function closeAll(){
   alert('تم إغلاق: ' + (r.closed.length ? r.closed.join(', ') : 'لا شيء كان مفتوحاً'));
   loadAll();
 }
-if(KEY){
-  fetch('/api/errors', {headers:{'x-admin-key': KEY}})
-    .then(r=>{ if(r.ok) login(); else { KEY=''; localStorage.removeItem('sniper_admin_key'); } })
-    .catch(()=>{});
-}
+if(KEY){ login(KEY); }
 document.getElementById('adminKey').addEventListener('keydown', e=>{ if(e.key==='Enter') login(); });
 </script>
 </body>
@@ -557,8 +556,12 @@ async def notify(kind, title, body='', level='info'):
 
 
 def create_app(bot, admin_key):
+    # ✅ إصلاح المسافات الخفية: تنظيف المفتاح عند الإنشاء مرة واحدة
+    _clean_admin_key = str(admin_key).strip()
+
     def authed(request):
-        return request.headers.get('x-admin-key', '') == admin_key
+        # ✅ تنظيف هيدر العميل أيضاً قبل المقارنة
+        return request.headers.get('x-admin-key', '').strip() == _clean_admin_key
 
     async def guard(request):
         if not authed(request):
