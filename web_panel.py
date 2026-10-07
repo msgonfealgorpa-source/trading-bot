@@ -167,7 +167,7 @@ tr:hover td{background:rgba(0,212,170,.03)}
 <header class="header"><div class="header-content">
   <div class="logo">
     <div class="logo-icon">🎯</div>
-    <div><h1>القناص الأسطوري</h1><span id="modeTxt">شاشة العمليات V8.1</span></div>
+    <div><h1>القناص الأسطوري</h1><span id="modeTxt">شاشة العمليات V8.2</span></div>
   </div>
   <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
     <div class="badge" id="liveBadge"><span class="dot"></span><span id="liveTxt">البوت حي ✓</span></div>
@@ -282,7 +282,7 @@ tr:hover td{background:rgba(0,212,170,.03)}
   </div>
 </div>
 
-<div class="footer">🔥 القناص الأسطوري V8.1 — شاشة العمليات الكاملة | كل المراكز محمية بستوب المنصة على Binance</div>
+<div class="footer">🔥 القناص الأسطوري V8.2 — شاشة العمليات الكاملة | كل المراكز محمية بستوب المنصة على Binance</div>
 </main>
 
 <script>
@@ -309,17 +309,24 @@ function showLogin(){
 async function login(){
   const k = document.getElementById('adminKey').value.trim();
   if(!k) return;
+  const btn = document.querySelector('.login-btn');
+  const errBox = document.getElementById('loginError');
+  btn.disabled = true; btn.textContent = 'جارٍ التحقق...';
   KEY = k;
   try{
-    await loadAll();
+    await api('/api/ping');                 /* فحص خفيف للمفتاح أولاً */
+    errBox.style.display='none';
+    try{ await loadAll(); }catch(e){ console.error('loadAll:', e); }
     localStorage.setItem('sniper_admin_key', KEY);
     document.getElementById('loginOverlay').classList.add('hidden');
     document.getElementById('mainContent').classList.remove('hidden');
-    document.getElementById('loginError').style.display='none';
-    if(!timer) timer = setInterval(loadAll, 10000);
+    if(!timer) timer = setInterval(()=>loadAll().catch(e=>console.error(e)), 10000);
   }catch(e){
-    document.getElementById('loginError').style.display='block';
+    errBox.textContent = (e && e.message === '401') ? 'مفتاح الوصول غير صحيح' : 'تعذّر الاتصال بالخادم — أعد المحاولة';
+    errBox.style.display='block';
     KEY='';
+  }finally{
+    btn.disabled = false; btn.textContent='دخول';
   }
 }
 function money(v){return (v>=0?'+':'') + '$' + Math.abs(v).toFixed(2)}
@@ -338,7 +345,7 @@ async function loadAll(){
 
   document.getElementById('balance').textContent = '$' + (+ov.balance).toFixed(2);
   const mode = ov.trade_enabled ? (ov.testnet ? '⚔️ تداول (تجريبي 🧪)' : '⚔️ تداول حقيقي') : '👁️ مراقبة فقط';
-  document.getElementById('modeTxt').textContent = mode + ' • V8.1';
+  document.getElementById('modeTxt').textContent = mode + ' • V8.2';
   document.getElementById('modeSub').textContent = 'رافعة ' + ov.leverage + 'x • هامش $' + ov.trade_size + ' • ' + ov.pairs + ' زوج';
 
   const dp = ov.today ? ov.today.pnl : 0;
@@ -354,9 +361,9 @@ async function loadAll(){
   document.getElementById('wr10').textContent = ov.tuner.winrate || '—';
   document.getElementById('tunerSub').textContent = 'عتبة: '+ov.tuner.min_score+' • قرب: '+(ov.tuner.proximity_pct*100).toFixed(1)+'%';
 
-  const live = ov.price_age < 120;
-  document.getElementById('liveBadge').className = 'badge' + (live?'':' off');
-  document.getElementById('liveTxt').textContent = live ? 'البوت حي ✓' : 'توقف تدفق الأسعار!';
+  const isLive = ov.price_age < 120;
+  document.getElementById('liveBadge').className = 'badge' + (isLive?'':' off');
+  document.getElementById('liveTxt').textContent = isLive ? 'البوت حي ✓' : 'توقف تدفق الأسعار!';
 
   /* الحمايات */
   const hb = document.getElementById('healthBox');
@@ -413,7 +420,7 @@ async function loadAll(){
     lastNotifId = nf.last_id || lastNotifId;
     document.getElementById('notifCount').textContent = nf.total_unread || nf.items.length;
     const feed = document.getElementById('notifFeed');
-    const live = document.getElementById('liveFeed');
+    const liveFeed = document.getElementById('liveFeed');
     let html = '';
     nf.items.forEach(n=>{
       const k = KIND_MAP[n.kind] || KIND_MAP.info;
@@ -424,8 +431,8 @@ async function loadAll(){
       html += item;
     });
     feed.innerHTML = html + feed.innerHTML;
-    live.innerHTML = html + live.innerHTML;
-    while(live.children.length > 15) live.removeChild(live.lastChild);
+    liveFeed.innerHTML = html + liveFeed.innerHTML;
+    while(liveFeed.children.length > 15) liveFeed.removeChild(liveFeed.lastChild);
     while(feed.children.length > 100) feed.removeChild(feed.lastChild);
   }
 
@@ -557,6 +564,11 @@ def create_app(bot, admin_key):
 
     async def index(request):
         return web.Response(text=PAGE, content_type='text/html')
+
+    async def ping(request):
+        g = await guard(request)
+        if g: return g
+        return web.json_response({'ok': True})
 
     async def overview(request):
         g = await guard(request)
@@ -706,6 +718,7 @@ def create_app(bot, admin_key):
 
     app = web.Application()
     app.router.add_get('/', index)
+    app.router.add_get('/api/ping', ping)
     app.router.add_get('/api/overview', overview)
     app.router.add_get('/api/trades', trades)
     app.router.add_get('/api/closed', closed)
