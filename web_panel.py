@@ -1,7 +1,6 @@
 """
-🔥 لوحة تحكم القناص — V8.1 (شاشة العمليات الكاملة — بلا تلغرام)
-كل ما يفعله البوت يُعرض هنا: إشعارات حية، صفقات، إشارات، أخطاء، مطوّر
-✅ إصلاحات: strip للمفتاح (مسافات خفية) + Auto-Login بالمفتاح المحفوظ
+🔥 لوحة تحكم القناص — V8.1 OPEN (شاشة العمليات — دخول مباشر بلا مفتاح)
+الحماية عبر سرية رابط Railway نفسه (رابط عشوائي طويل لا يعرفه أحد سواك)
 """
 
 import os
@@ -34,19 +33,13 @@ body{font-family:'Tajawal',sans-serif;background:var(--bg);color:var(--txt);min-
 radial-gradient(ellipse at 20% 20%,rgba(0,212,170,.07) 0%,transparent 50%),
 radial-gradient(ellipse at 80% 80%,rgba(139,92,246,.07) 0%,transparent 50%);pointer-events:none;z-index:0}
 .hidden{display:none!important}
-/* Login */
-.login-overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);backdrop-filter:blur(10px);
-display:flex;align-items:center;justify-content:center;z-index:1000}
-.login-box{background:var(--card);border:1px solid var(--bord);border-radius:20px;padding:40px;max-width:400px;width:92%;text-align:center}
-.login-box h2{margin-bottom:8px;background:linear-gradient(135deg,var(--green),var(--blue));-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-size:26px}
-.login-box p{color:var(--sub);margin-bottom:25px;font-size:14px}
-.login-input{width:100%;padding:15px;background:var(--bg2);border:1px solid var(--bord);border-radius:12px;color:var(--txt);
-font-family:inherit;font-size:16px;text-align:center;letter-spacing:4px;margin-bottom:18px;transition:.3s}
-.login-input:focus{outline:none;border-color:var(--green)}
-.login-btn{width:100%;padding:15px;background:linear-gradient(135deg,#00d4aa,#00a080);border:none;border-radius:12px;
-color:#fff;font-family:inherit;font-size:16px;font-weight:700;cursor:pointer;transition:.3s}
-.login-btn:hover{transform:translateY(-2px);box-shadow:0 8px 25px rgba(0,212,170,.3)}
-.login-error{color:var(--red);font-size:14px;margin-top:12px;display:none}
+/* Loading */
+.loading-overlay{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;
+align-items:center;justify-content:center;z-index:1000;gap:15px}
+.loading-spinner{width:50px;height:50px;border:4px solid rgba(0,212,170,.2);border-top-color:var(--green);
+border-radius:50%;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-text{color:var(--sub);font-size:14px}
 /* Header */
 .header{background:var(--bg2);border-bottom:1px solid var(--bord);padding:1rem 1.5rem;position:sticky;top:0;z-index:100;backdrop-filter:blur(10px)}
 .header-content{max-width:1400px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
@@ -155,14 +148,9 @@ tr:hover td{background:rgba(0,212,170,.03)}
 <body>
 <div class="bg-pattern"></div>
 
-<div class="login-overlay" id="loginOverlay">
-  <div class="login-box">
-    <h2>🎯 القناص الأسطوري</h2>
-    <p>شاشة العمليات الكاملة — أدخل مفتاح الوصول</p>
-    <input type="password" class="login-input" id="adminKey" placeholder="ADMIN_KEY" autocomplete="off">
-    <button class="login-btn" onclick="login()">دخول</button>
-    <div class="login-error" id="loginError">مفتاح الوصول غير صحيح</div>
-  </div>
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="loading-spinner"></div>
+  <div class="loading-text">جارِ فتح شاشة العمليات...</div>
 </div>
 
 <header class="header"><div class="header-content">
@@ -277,7 +265,8 @@ tr:hover td{background:rgba(0,212,170,.03)}
         </div>
         <p style="color:var(--sub);font-size:11px;margin-top:12px;line-height:1.6">
         ⚠️ الإيقاف مؤقت (ذاكرة فقط) — بعد إعادة النشر يعود لمتغيرات البيئة.<br>
-        المراكز المفتوحة تبقى مُدارة ومحمية بستوب المنصة حتى أثناء الإيقاف.</p>
+        المراكز المفتوحة تبقى مُدارة ومحمية بستوب المنصة حتى أثناء الإيقاف.<br>
+        🔒 الحماية عبر سرية هذا الرابط — لا تشاركه مع أحد!</p>
       </div>
     </div>
   </div>
@@ -287,13 +276,12 @@ tr:hover td{background:rgba(0,212,170,.03)}
 </main>
 
 <script>
-let KEY = localStorage.getItem('sniper_admin_key') || '';
 let timer = null;
 let lastNotifId = 0;
 
 async function api(path, method='GET'){
-  const res = await fetch(path, {method, headers:{'x-admin-key': KEY}});
-  if(res.status === 401) throw new Error('401');
+  const res = await fetch(path, {method});
+  if(!res.ok) throw new Error('' + res.status);
   return res.json();
 }
 function switchTab(name, el){
@@ -301,43 +289,6 @@ function switchTab(name, el){
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   document.getElementById('tab-'+name).classList.add('active');
   el.classList.add('active');
-}
-function showLogin(){
-  if(timer){clearInterval(timer);timer=null}
-  document.getElementById('loginOverlay').classList.remove('hidden');
-  document.getElementById('mainContent').classList.add('hidden');
-}
-async function login(forcedKey = null){
-  const inputEl = document.getElementById('adminKey');
-  const k = (forcedKey && String(forcedKey).trim()) || (inputEl ? inputEl.value.trim() : '');
-  if(!k) return;
-  KEY = k;
-  const errBox = document.getElementById('loginError');
-  try{
-    const test = await fetch('/api/errors', {headers:{'x-admin-key': KEY}});
-    if(test.status === 401){
-      if(!forcedKey && errBox){
-        errBox.textContent = 'مفتاح الوصول غير صحيح';
-        errBox.style.display='block';
-      }
-      KEY='';
-      localStorage.removeItem('sniper_admin_key');
-      return;
-    }
-    if(!test.ok){
-      if(errBox){ errBox.textContent = 'خطأ من الخادم (' + test.status + ')'; errBox.style.display='block'; }
-      return;
-    }
-  }catch(e){
-    if(errBox){ errBox.textContent = 'تعذر الاتصال — تحقق من الإنترنت'; errBox.style.display='block'; }
-    return;
-  }
-  localStorage.setItem('sniper_admin_key', KEY);
-  document.getElementById('loginOverlay').classList.add('hidden');
-  document.getElementById('mainContent').classList.remove('hidden');
-  if(errBox) errBox.style.display='none';
-  if(!timer) timer = setInterval(loadAll, 10000);
-  loadAll().catch(e=>console.log(e));
 }
 function money(v){return (v>=0?'+':'') + '$' + Math.abs(v).toFixed(2)}
 function sign(v,d=1){return (v>=0?'+':'') + v.toFixed(d)}
@@ -497,8 +448,20 @@ async function closeAll(){
   alert('تم إغلاق: ' + (r.closed.length ? r.closed.join(', ') : 'لا شيء كان مفتوحاً'));
   loadAll();
 }
-if(KEY){ login(KEY); }
-document.getElementById('adminKey').addEventListener('keydown', e=>{ if(e.key==='Enter') login(); });
+/* ✅ دخول مباشر — لا مفتاح */
+async function start(){
+  try{
+    await loadAll();
+    document.getElementById('loadingOverlay').classList.add('hidden');
+    document.getElementById('mainContent').classList.remove('hidden');
+    if(!timer) timer = setInterval(loadAll, 10000);
+  }catch(e){
+    document.querySelector('.loading-text').textContent =
+      'تعذر تحميل البيانات (' + e.message + ') — سيعاد المحاولة تلقائياً';
+    setTimeout(start, 5000);
+  }
+}
+start();
 </script>
 </body>
 </html>"""
@@ -555,25 +518,11 @@ async def notify(kind, title, body='', level='info'):
         await PANEL_DB.add(kind, title, body, level)
 
 
-def create_app(bot, admin_key):
-    # ✅ إصلاح المسافات الخفية: تنظيف المفتاح عند الإنشاء مرة واحدة
-    _clean_admin_key = str(admin_key).strip()
-
-    def authed(request):
-        # ✅ تنظيف هيدر العميل أيضاً قبل المقارنة
-        return request.headers.get('x-admin-key', '').strip() == _clean_admin_key
-
-    async def guard(request):
-        if not authed(request):
-            return web.json_response({'ok': False}, status=401)
-        return None
-
+def create_app(bot):
     async def index(request):
         return web.Response(text=PAGE, content_type='text/html')
 
     async def overview(request):
-        g = await guard(request)
-        if g: return g
         today = time.strftime('%Y-%m-%d')
         row = await bot.db.get_day_stats(today)
         newest = max((p.get('ts', 0) for p in bot.live_prices.values()), default=0)
@@ -601,8 +550,6 @@ def create_app(bot, admin_key):
         })
 
     async def trades(request):
-        g = await guard(request)
-        if g: return g
         out = []
         for symbol, t in list(bot.active_trades.items()):
             prices = bot.get_price(symbol)
@@ -623,8 +570,6 @@ def create_app(bot, admin_key):
         return web.json_response(out)
 
     async def closed(request):
-        g = await guard(request)
-        if g: return g
         out = []
         try:
             async with aiosqlite.connect(bot.db.db_name) as db:
@@ -646,8 +591,6 @@ def create_app(bot, admin_key):
         return web.json_response(out)
 
     async def signals(request):
-        g = await guard(request)
-        if g: return g
         out = []
         try:
             async with aiosqlite.connect(bot.db.db_name) as db:
@@ -673,40 +616,28 @@ def create_app(bot, admin_key):
         return web.json_response(out)
 
     async def notifications(request):
-        g = await guard(request)
-        if g: return g
         after = int(request.query.get('after', 0))
         if PANEL_DB:
             return web.json_response(await PANEL_DB.get_after(after))
         return web.json_response({'items': [], 'last_id': after, 'total_unread': 0})
 
     async def tuner_history(request):
-        g = await guard(request)
-        if g: return g
         return web.json_response(list(bot.tuner.results))
 
     async def errors(request):
-        g = await guard(request)
-        if g: return g
         return web.json_response({'errors': dict(bot.error_counts)})
 
     async def pause(request):
-        g = await guard(request)
-        if g: return g
         bot.TRADE_ENABLED = False
         return web.json_response({'ok': True})
 
     async def resume(request):
-        g = await guard(request)
-        if g: return g
         if not bot.binance_api_key:
             return web.json_response({'ok': False, 'error': 'مفاتيح API ناقصة'}, status=400)
         bot.TRADE_ENABLED = True
         return web.json_response({'ok': True})
 
     async def close_all(request):
-        g = await guard(request)
-        if g: return g
         closed = []
         for symbol, t in list(bot.active_trades.items()):
             prices = bot.get_price(symbol)
@@ -734,20 +665,17 @@ def create_app(bot, admin_key):
 
 async def start_web_panel(bot):
     global PANEL_DB
-    admin_key = os.environ.get('ADMIN_KEY', '')
-    if not admin_key:
-        print('⚠️ لوحة التحكم معطلة: ADMIN_KEY غير مضبوط')
-        return False
+    # ✅ OPEN MODE: لا حاجة لـ ADMIN_KEY — الدخول مباشر عبر رابط Railway السري
     try:
         PANEL_DB = PanelDB(bot.db.db_name)
         await PANEL_DB.init()
-        app = create_app(bot, admin_key)
+        app = create_app(bot)
         runner = web.AppRunner(app)
         await runner.setup()
         port = int(os.environ.get('PORT', '8080'))
         site = web.TCPSite(runner, '0.0.0.0', port)
         await site.start()
-        print(f'🖥️ لوحة التحكم تعمل على المنفذ {port}')
+        print(f'🖥️ لوحة التحكم تعمل على المنفذ {port} (وضع مفتوح)')
         return True
     except Exception as e:
         print(f'⚠️ فشل تشغيل اللوحة (البوت يكمل عمله بلا لوحة): {e}')
