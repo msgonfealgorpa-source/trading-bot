@@ -35,7 +35,6 @@ from urllib.parse import urlencode
 from logging.handlers import RotatingFileHandler
 import websockets
 import aiosqlite
-from web_panel import start_web_panel, notify as panel_notify
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -46,6 +45,43 @@ fmt = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 fh = RotatingFileHandler('bot_v8.log', maxBytes=2*1024*1024, backupCount=2, encoding='utf-8')
 fh.setFormatter(fmt); logger.addHandler(fh)
 ch = logging.StreamHandler(); ch.setFormatter(fmt); logger.addHandler(ch)
+
+
+class TelegramLoggingHandler(logging.Handler):
+    """معالج أخطاء تلغرام مع صمام خنق (رسالة كل 5 دقائق لنفس المصدر)"""
+    THROTTLE_SECONDS = 300
+
+    def __init__(self):
+        super().__init__()
+        self._last_sent = {}
+
+    def emit(self, record):
+        try:
+            if record.levelno >= logging.ERROR:
+                tok = os.environ.get('TELEGRAM_TOKEN', '')
+                cid = os.environ.get('CHAT_ID', '')
+                if tok and cid:
+                    key = (record.module, record.lineno)
+                    now = time.time()
+                    if now - self._last_sent.get(key, 0) < self.THROTTLE_SECONDS:
+                        return
+                    self._last_sent[key] = now
+                    msg_text = f"🚨 *خطأ:*\n```\n{self.format(record)[:400]}\n```"
+                    url = f"https://api.telegram.org/bot{tok}/sendMessage"
+                    threading.Thread(target=self._send, args=(url, cid, msg_text), daemon=True).start()
+        except Exception:
+            pass
+
+    def _send(self, url, cid, msg_text):
+        try:
+            requests.post(url, data={'chat_id': cid, 'text': msg_text, 'parse_mode': 'Markdown'}, timeout=5)
+        except Exception:
+            pass
+
+tg_handler = TelegramLoggingHandler()
+tg_handler.setLevel(logging.ERROR)
+logger.addHandler(tg_handler)
+
 
 # ═══════════════════════ قاعدة البيانات ═════════════════════
 class DatabaseManager:
@@ -326,6 +362,8 @@ class WhaleSMCEngine:
 # ══════════════════════════════════════════════════════════════════════
 class LegendarySniperFuturesV8:
     def __init__(self):
+        self.tg_token = os.environ.get('TELEGRAM_TOKEN', '')
+        self.tg_chat = os.environ.get('CHAT_ID', '')
         self.binance_api_key = os.environ.get('BINANCE_API_KEY', '')
         self.binance_api_secret = os.environ.get('BINANCE_API_SECRET', '')
 
@@ -416,19 +454,13 @@ class LegendarySniperFuturesV8:
         else: return f"${price:,.1f}"
 
     async def tg(self, msg):
-        """✅ V8.1: كل إشعار يذهب للوحة بدل تلغرام — لا تغيير في أماكن الاستدعاء"""
         try:
-            first_line = msg.split('\n')[0].replace('*', '').strip()
-            kind = 'info'
-            if msg.startswith('✅') or 'صفقة منفذة' in msg: kind = 'trade'
-            elif msg.startswith('🎯') or 'جني' in first_line: kind = 'partial'
-            elif msg.startswith('🏁') or 'إغلاق' in first_line: kind = 'close'
-            elif msg.startswith('🚨') or 'خطأ' in first_line or msg.startswith('⚠️'): kind = 'error'
-            elif 'المطوّر' in first_line or msg.startswith('🧠'): kind = 'tuner'
-            elif msg.startswith('🛑'): kind = 'system'
-            await panel_notify(kind, first_line, msg, 'info')
-        except Exception:
-            pass
+            if not self.session or not self.tg_token: return
+            await self.session.post(
+                f"https://api.telegram.org/bot{self.tg_token}/sendMessage",
+                data={'chat_id': self.tg_chat, 'text': msg, 'parse_mode': 'Markdown'}, timeout=10)
+        except Exception as e:
+            logger.warning(f"تعذر إرسال رسالة تلغرام: {e}")
 
     # ═══ توقيت الخادم (علاج خطأ -1021 الشهير) ═══
     async def sync_server_time(self):
@@ -449,7 +481,7 @@ class LegendarySniperFuturesV8:
         ).hexdigest()
         return params
 
-    async def _fapi_request(self, method, endpoint, params=None, signed=False, retries=3, quiet=()):
+    async def _fapi_request(self, method, endpoint, params=None, signed=False, retries=3):
         for attempt in range(retries):
             try:
                 url = f"{self.trade_url}{endpoint}"
@@ -476,8 +508,6 @@ class LegendarySniperFuturesV8:
                         logger.warning(f"Futures API {r.status} — إعادة محاولة...")
                         await asyncio.sleep(2 ** attempt)
                         continue
-                    if any(str(c) in body for c in quiet):
-                        return None
                     logger.warning(f"Futures API Error {r.status}: {body[:120]}")
                     return None
             except asyncio.TimeoutError:
@@ -501,7 +531,7 @@ class LegendarySniperFuturesV8:
                 lev_res = await self._fapi_request('POST', '/fapi/v1/leverage',
                     {'symbol': symbol, 'leverage': self.LEVERAGE}, signed=True)
                 await self._fapi_request('POST', '/fapi/v1/marginType',
-                    {'symbol': symbol, 'marginType': 'ISOLATED'}, signed=True, quiet=(-4046,))
+                    {'symbol': symbol, 'marginType': 'ISOLATED'}, signed=True)
                 if lev_res and lev_res.get('leverage') == self.LEVERAGE:
                     setup_count += 1
             except Exception as e:
@@ -596,9 +626,7 @@ class LegendarySniperFuturesV8:
 
     # ═══ WebSocket ═══
     async def ws_manager(self):
-        # ✅ إصلاح 1: الستريم يتبع الوضع — Testnet يستقبل أسعار Testnet نفسها
-        ws_url = ("wss://stream.binancefuture.com/ws/!bookTicker" if self.TESTNET
-                  else "wss://fstream.binance.com/ws/!bookTicker")
+        ws_url = "wss://fstream.binance.com/ws/!bookTicker"
         while True:
             try:
                 async with websockets.connect(ws_url, ping_interval=20) as ws:
@@ -751,7 +779,7 @@ class LegendarySniperFuturesV8:
             },
             'signals_smc': [
                 f"🐋 {'صيد حوت' if sweep else 'إعادة اختبار'} في منطقة {'طلب' if trend=='BUY' else 'عرض'}",
-                f"📊 تقييم الإشارة: {score}/8",
+                f"📊 تقييم الإشارة: {score}/10",
                 f"🛡️ وقف ATR ({risk_pct:.1f}%)"]
         }
 
@@ -782,7 +810,7 @@ class LegendarySniperFuturesV8:
         await self._fapi_request('POST', '/fapi/v1/leverage',
             {'symbol': symbol, 'leverage': self.LEVERAGE}, signed=True)
         await self._fapi_request('POST', '/fapi/v1/marginType',
-            {'symbol': symbol, 'marginType': 'ISOLATED'}, signed=True, quiet=(-4046,))
+            {'symbol': symbol, 'marginType': 'ISOLATED'}, signed=True)
 
         side = 'BUY' if analysis['direction'] == 'BUY' else 'SELL'
         result = await self._fapi_request('POST', '/fapi/v1/order', {
@@ -801,14 +829,12 @@ class LegendarySniperFuturesV8:
             'symbol': symbol, 'side': side, 'entry_price': entry_price,
             'quantity': quantity, 'sl': analysis['sl'], 'tp': analysis['tp1'],
             'tp2': analysis['tp2'],
-            'score': analysis.get('score'),   # ✅ إصلاح 3: يُعرض في رسالة الإغلاق
             'trailing_active': False, 'highest_price': entry_price,
             'lowest_price': entry_price, 'entry_time': time.time(),
             'partial_closed': False, 'realized_pnl': 0.0,
             'stop_order_id': None, 'tp_order_id': None,
-            'stop_is_algo': False, 'tp_is_algo': False,
             'stop_synced_price': None, 'tp_skipped': False
-            }
+        }
         self.active_trades[symbol] = trade_data
         await self.db.save_trade(trade_data)
         self.stats['trades_executed'] += 1
@@ -821,7 +847,7 @@ class LegendarySniperFuturesV8:
         await self._sync_stop_order(trade_data, ref_price)
         await self.db.save_trade(trade_data)
 
-        msg = (f"✅ *صفقة منفذة!* (تقييم {analysis['score']}/8)\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        msg = (f"✅ *صفقة منفذة!* (تقييم {analysis['score']}/10)\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
                f"🪙 `{symbol}` | رافعة {self.LEVERAGE}x | هامش {self.TRADE_SIZE_USDT:.0f}$\n"
                f"💵 الدخول: {self.fmt_price(entry_price)}\n"
                f"🛑 SL: {self.fmt_price(analysis['sl'])}\n"
@@ -829,20 +855,6 @@ class LegendarySniperFuturesV8:
                f"🛡️ ستوب المنصة: {'✅' if trade_data['stop_order_id'] else '⏳'}\n"
                f"🧠 {self.tuner.describe()}")
         await self.tg(msg)
-
-    # ═══ أوامر المنصة الشرطية (Algo Order API) — علاج خطأ -4120 الشهير ═══
-    async def _place_algo_order(self, params):
-        """تثبيت أمر شرطي (ستوب/هدف) عبر Algo Order API الجديد من Binance"""
-        payload = {'algoType': 'CONDITIONAL'}
-        payload.update(params)
-        res = await self._fapi_request('POST', '/fapi/v1/algoOrder', payload, signed=True)
-        if res and (res.get('algoId') or res.get('orderId')):
-            return res.get('algoId') or res.get('orderId')
-        return None
-
-    async def _cancel_algo_order(self, symbol, algo_id):
-        await self._fapi_request('DELETE', '/fapi/v1/algoOrder',
-            {'symbol': symbol, 'algoId': algo_id}, signed=True, quiet=('-2011', '-2013'))
 
     # ═══ مزامنة الستوب: وضع الجديد أولاً ثم حذف القديم (لا فجوة حماية أبداً) ═══
     async def _sync_stop_order(self, trade, current_price):
@@ -860,17 +872,17 @@ class LegendarySniperFuturesV8:
                 return False
 
         stop_side = 'SELL' if is_buy else 'BUY'
-        new_id = await self._place_algo_order({
+        res = await self._fapi_request('POST', '/fapi/v1/order', {
             'symbol': symbol, 'side': stop_side, 'type': 'STOP_MARKET',
-            'triggerPrice': desired_str, 'closePosition': 'true',
-            'workingType': 'CONTRACT_PRICE'})
+            'stopPrice': desired_str, 'closePosition': 'true'
+        }, signed=True)
 
-        if new_id:
+        if res and res.get('orderId'):
             old_id = trade.get('stop_order_id')          # ✅ الجديد حي الآن — احذف القديم بأمان
             if old_id:
-                await self._cancel_algo_order(symbol, old_id)
-            trade['stop_order_id'] = new_id
-            trade['stop_is_algo'] = True
+                await self._fapi_request('DELETE', '/fapi/v1/order',
+                    {'symbol': symbol, 'orderId': old_id}, signed=True)
+            trade['stop_order_id'] = res['orderId']
             trade['stop_synced_price'] = desired
             self._reset_error(f"ستوب المنصة {symbol}")
             return True
@@ -891,15 +903,14 @@ class LegendarySniperFuturesV8:
             trade['tp_skipped'] = True   # السعر تجاوز الهدف — الوقف المتحرك كافٍ
             return
         close_side = 'SELL' if is_buy else 'BUY'
-        new_id = await self._place_algo_order({
+        res = await self._fapi_request('POST', '/fapi/v1/order', {
             'symbol': symbol, 'side': close_side, 'type': 'TAKE_PROFIT_MARKET',
-            'triggerPrice': self.price_to_str(symbol, tp2),
+            'stopPrice': self.price_to_str(symbol, tp2),
             'quantity': self.qty_to_str(symbol, trade['quantity']),
-            'reduceOnly': 'true',
-            'workingType': 'CONTRACT_PRICE'})
-        if new_id:
-            trade['tp_order_id'] = new_id
-            trade['tp_is_algo'] = True
+            'reduceOnly': 'true'
+        }, signed=True)
+        if res and res.get('orderId'):
+            trade['tp_order_id'] = res['orderId']
             await self.tg(f"🎯 *هدف TP2 مثبّت على المنصة* (`{symbol}`) عند {self.fmt_price(tp2)}")
         else:
             trade['tp_skipped'] = True
@@ -994,17 +1005,11 @@ class LegendarySniperFuturesV8:
         symbol = trade['symbol']
         is_buy = trade['side'] == 'BUY'
 
-        for oid_key, algo_key in (('stop_order_id', 'stop_is_algo'), ('tp_order_id', 'tp_is_algo')):
+        for oid_key in ('stop_order_id', 'tp_order_id'):
             oid = trade.get(oid_key)
-            if not oid:
-                continue
-            if trade.get(algo_key):
-                await self._cancel_algo_order(symbol, oid)
-            else:
-                # مصدر مجهول (محمّل من القاعدة بعد إعادة تشغيل) — جرّب المسارين بصمت
+            if oid:
                 await self._fapi_request('DELETE', '/fapi/v1/order',
-                    {'symbol': symbol, 'orderId': oid}, signed=True, quiet=('-2011', '-2013'))
-                await self._cancel_algo_order(symbol, oid)
+                    {'symbol': symbol, 'orderId': oid}, signed=True)
 
         if pnl_override is not None:
             final_pnl = pnl_override
@@ -1035,7 +1040,7 @@ class LegendarySniperFuturesV8:
         icon = "✅" if is_win else "❌"
         partial_note = (f"\n🧾 جني جزئي سابق: `{trade.get('realized_pnl', 0.0):.4f} USDT`"
                         if abs(trade.get('realized_pnl', 0.0)) > 1e-9 else "")
-        score_note = f"\n📊 تقييم الإشارة: `{trade.get('score', '—')}/8`" if trade.get('score') else ""
+        score_note = f"\n📊 تقييم الإشارة: `{trade.get('score', '—')}/10`" if trade.get('score') else ""
         msg = (f"🏁 {icon} *إغلاق `{symbol}`*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
                f"{reason}\n"
                f"💵 النتيجة: `{total_pnl:.4f} USDT` ({margin_pnl_pct:.1f}% من الهامش)\n"
@@ -1180,7 +1185,7 @@ class LegendarySniperFuturesV8:
                 continue
             self.last_discovery_alert[key] = now
             fresh_lines.append(f"🐋 `{a['symbol']}` *{a['direction']}* @ {self.fmt_price(a['price'])}"
-                               f" (تقييم {a['score']}/8)")
+                               f" (تقييم {a['score']}/10)")
 
         if fresh_lines:
             await self.tg("🚀 *إشارات جديدة!*\n━━━━━━━━━━━━━━━━━━━━━━━━\n" + "\n".join(fresh_lines))
@@ -1280,21 +1285,12 @@ class LegendarySniperFuturesV8:
             for symbol, pos in open_pos.items():
                 if symbol in self.active_trades:
                     continue
-                side = 'BUY' if pos['amt'] > 0 else 'SELL'
-                entry = pos['entry'] or (self.live_prices.get(symbol, {}).get('bid', 0))
-
-                # ✅ إصلاح 2: لا تتبنَّ مركزاً بسعر دخول غير صالح (0 أو أقل)
-                # التبنّي المتأخر أفضل من تبنٍّ فاسد — ستُعاد المحاولة في إقلاع قادم
-                if not entry or entry <= 0:
-                    await self.tg(f"⚠️ *تعذّر تبنّي مركز يتيم* (`{symbol}`)\n"
-                                  f"سعر الدخول غير متاح بعد — سيُعاد في إعادة تشغيل قادمة")
-                    continue
-
                 df = await self.get_klines(symbol, '15m', 50)
                 atr = self._compute_atr(df) if df is not None else None
                 if not atr or atr <= 0 or math.isnan(atr):
-                    atr = entry * 0.01   # احتياط: 1% من سعر صالح (وليس من صفر)
-
+                    atr = pos['entry'] * 0.01
+                side = 'BUY' if pos['amt'] > 0 else 'SELL'
+                entry = pos['entry'] or (self.live_prices.get(symbol, {}).get('bid', 0))
                 if side == 'BUY':
                     sl, tp1, tp2 = entry - 2*atr, entry + 1.5*atr, entry + 4*atr
                 else:
@@ -1305,7 +1301,6 @@ class LegendarySniperFuturesV8:
                     'trailing_active': False, 'highest_price': entry, 'lowest_price': entry,
                     'entry_time': time.time(), 'partial_closed': False,
                     'realized_pnl': 0.0, 'stop_order_id': None, 'tp_order_id': None,
-                    'stop_is_algo': False, 'tp_is_algo': False,
                     'stop_synced_price': None, 'tp_skipped': False
                 }
                 self.active_trades[symbol] = trade
@@ -1316,29 +1311,17 @@ class LegendarySniperFuturesV8:
                               f"وقف ATR تلقائي عند {self.fmt_price(sl)}")
 
             # 3) إلغاء أوامر يتيمة (ستوب/TP لا تطابق أي صفقة حية)
-            orders = await self._fapi_request('GET', '/fapi/v1/openOrders', signed=True) or []
-            try:
-                orders += await self._fapi_request('GET', '/fapi/v1/algoOpenOrders', signed=True) or []
-            except Exception:
-                pass
+            orders = await self._fapi_request('GET', '/fapi/v1/openOrders', signed=True)
             known_ids = set()
             for t in self.active_trades.values():
                 if t.get('stop_order_id'): known_ids.add(t['stop_order_id'])
                 if t.get('tp_order_id'): known_ids.add(t['tp_order_id'])
             cancelled = 0
-            for o in orders:
-                oid = o.get('orderId') or o.get('algoId')
-                if oid in known_ids or o.get('type') not in ('STOP_MARKET', 'TAKE_PROFIT_MARKET'):
-                    continue
-                if o.get('algoId'):
-                    await self._fapi_request('DELETE', '/fapi/v1/algoOrder',
-                        {'symbol': o['symbol'], 'algoId': o['algoId']}, signed=True,
-                        quiet=('-2011', '-2013'))
-                else:
+            for o in orders or []:
+                if o.get('orderId') not in known_ids and o.get('type') in ('STOP_MARKET', 'TAKE_PROFIT_MARKET'):
                     await self._fapi_request('DELETE', '/fapi/v1/order',
-                        {'symbol': o['symbol'], 'orderId': o['orderId']}, signed=True,
-                        quiet=('-2011', '-2013'))
-                cancelled += 1
+                        {'symbol': o['symbol'], 'orderId': o['orderId']}, signed=True)
+                    cancelled += 1
             if cancelled:
                 await self.tg(f"🧹 *تنظيف ذاتي:* أُلغي {cancelled} أمر يتيم على المنصة")
             logger.info(f"🧾 المصالحة الذاتية: {len(open_pos)} مركز حي، {cancelled} أمر يتيم ملغى")
@@ -1359,8 +1342,6 @@ class LegendarySniperFuturesV8:
     async def main_loop(self):
         self.session = aiohttp.ClientSession()
         try:
-            # ✅ V8.1: لوحة العمليات — بديل تلغرام الكامل
-            await start_web_panel(self)
             loop = asyncio.get_running_loop()
             for sig_name in ('SIGINT', 'SIGTERM'):
                 try:
@@ -1408,7 +1389,7 @@ class LegendarySniperFuturesV8:
 
             mode_trade = "⚔️ تداول تلقائي" + (" (TESTNET 🧪)" if self.TESTNET else "") \
                          if self.TRADE_ENABLED else "👁️ مراقبة فقط"
-            msg = ("🔥 *القناص الأسطوري V8.2 — الذكي التكيفي!*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            msg = ("🔥 *القناص الأسطوري V8.0 — الذكي التكيفي!*\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
                    f"📡 الوضع: {mode_trade} | رافعة {self.LEVERAGE}x | هامش {self.TRADE_SIZE_USDT:.0f}$\n"
                    f"🧠 المطوّر التكيفي: {self.tuner.describe()}\n"
                    "🎯 دخول: تقييم مرن (Sweep=3 / Retest=2 / ستوك / حجم / قرب OB)\n"
