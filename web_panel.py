@@ -1,9 +1,9 @@
 """
-🖥️ لوحة القناص V9 — من الصفر
+🖥️ لوحة القناص V9.1 — من الصفر
 ✅ دخول مباشر بلا مفتاح (الحماية = سرية رابط Railway)
 ✅ عرض كل إجراء صغير وكبير يقوم به البوت
-✅ لا تعليق أبداً: كل طلب له مهلة 6 ثوانٍ + فشل مرئي بلا دائرة أبدية
-✅ لا أخطاء جافاسكريبت: مراجعة سطر سطر
+✅ لا تعليق: مهلة 6 ثوان لكل طلب + فشل مرئي
+✅ جديد V9.1: تبويب 📊 الأداء اليومي — صفقات/فوز/خسارة كل يوم + سجل 14 يوم + إجماليات
 """
 
 import os
@@ -25,7 +25,7 @@ PAGE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>🎯 القناص V9</title>
+<title>🎯 القناص V9.1</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -36,7 +36,6 @@ body{font-family:'Tajawal',sans-serif;background:var(--bg);color:var(--txt);min-
 radial-gradient(ellipse at 20% 20%,rgba(0,212,170,.07) 0%,transparent 50%),
 radial-gradient(ellipse at 80% 80%,rgba(139,92,246,.07) 0%,transparent 50%);pointer-events:none;z-index:0}
 .hidden{display:none!important}
-/* Header */
 .hd{background:var(--bg2);border-bottom:1px solid var(--bord);padding:12px 16px;position:sticky;top:0;z-index:100}
 .hd-in{max-width:1400px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 .logo{display:flex;align-items:center;gap:12px}
@@ -54,7 +53,6 @@ button{font-family:inherit}
 .btn-g{background:linear-gradient(135deg,#00d4aa,#00a080);color:#fff}
 .btn-r{background:rgba(239,68,68,.15);color:var(--red);border:1px solid rgba(239,68,68,.4)}
 .btn-s{background:rgba(255,255,255,.08);color:var(--sub);border:1px solid var(--bord)}
-/* Layout */
 main{position:relative;z-index:1;max-width:1400px;margin:0 auto;padding:16px}
 .tabs{display:flex;gap:5px;margin-bottom:18px;border-bottom:1px solid var(--bord);overflow-x:auto;padding-bottom:2px}
 .tab{padding:12px 18px;border:none;background:transparent;color:var(--sub);cursor:pointer;font-weight:600;
@@ -64,7 +62,6 @@ font-size:14px;border-radius:10px 10px 0 0;transition:.2s;white-space:nowrap;pos
 .tc{display:none}
 .tc.act{display:block;animation:fi .3s}
 @keyframes fi{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
-/* Cards */
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:14px;margin-bottom:20px}
 .card{background:var(--card);border:1px solid var(--bord);border-radius:16px;padding:20px;position:relative;overflow:hidden;transition:.3s}
 .card:hover{border-color:rgba(0,212,170,.3)}
@@ -77,10 +74,8 @@ font-size:14px;border-radius:10px 10px 0 0;transition:.2s;white-space:nowrap;pos
 .card.g .v{color:var(--green)}.card.b .v{color:var(--blue)}.card.p .v{color:var(--purple)}
 .card.o .v{color:var(--orange)}.card.y .v{color:var(--yellow)}
 .pos{color:var(--green)!important}.neg{color:var(--red)!important}
-/* Sections */
 .sec{background:var(--card);border:1px solid var(--bord);border-radius:16px;padding:20px;margin-bottom:20px}
 .sec h3{margin-bottom:14px;font-size:16px}
-/* Tables */
 table{width:100%;border-collapse:collapse}
 th{text-align:right;padding:9px;color:var(--sub);font-size:11px;border-bottom:1px solid var(--bord)}
 td{padding:11px 9px;font-size:13px;border-bottom:1px solid rgba(255,255,255,.04)}
@@ -94,7 +89,6 @@ tr:hover td{background:rgba(0,212,170,.03)}
 .tag.info{background:rgba(59,130,246,.15);color:var(--blue)}
 .tag.ok{background:rgba(16,185,129,.15);color:#10b981}
 .empty{text-align:center;color:var(--sub);padding:30px;font-size:14px}
-/* Feed */
 .feed{display:flex;flex-direction:column;gap:9px;max-height:560px;overflow-y:auto;padding-left:4px}
 .nt{display:flex;gap:12px;padding:13px;background:var(--bg2);border-radius:12px;border-right:4px solid transparent;animation:fi .3s}
 .nt.trade{border-right-color:var(--green)}.nt.partial{border-right-color:var(--blue)}
@@ -108,7 +102,6 @@ tr:hover td{background:rgba(0,212,170,.03)}
 .nt-t{font-size:14px;font-weight:700;margin-bottom:3px}
 .nt-x{font-size:12px;color:var(--sub);line-height:1.6;white-space:pre-wrap;word-break:break-word}
 .nt-tm{font-size:10px;color:var(--sub);opacity:.7;direction:ltr;text-align:right;margin-top:4px}
-/* Health */
 .hg{display:flex;flex-direction:column;gap:10px}
 .hi{display:flex;align-items:center;gap:12px;background:var(--bg2);padding:13px;border-radius:12px}
 .hd2{width:10px;height:10px;border-radius:50%;flex-shrink:0}
@@ -123,7 +116,6 @@ tr:hover td{background:rgba(0,212,170,.03)}
 .bar{display:flex;height:6px;border-radius:3px;overflow:hidden;margin-top:10px;background:var(--bg2)}
 .foot{text-align:center;padding:18px;color:var(--sub);font-size:12px;border-top:1px solid var(--bord);margin-top:18px}
 .arow{display:flex;gap:10px;flex-wrap:wrap}
-/* Status bar */
 .sbar{background:var(--bg2);border:1px solid var(--bord);border-radius:12px;padding:10px 16px;
 margin-bottom:16px;display:flex;align-items:center;gap:10px;font-size:13px;color:var(--sub)}
 .sbar b{color:var(--green)}
@@ -136,7 +128,7 @@ margin-bottom:16px;display:flex;align-items:center;gap:10px;font-size:13px;color
 <header class="hd"><div class="hd-in">
   <div class="logo">
     <div class="logo-ic">🎯</div>
-    <div><h1>القناص الأسطوري</h1><span id="modeTxt">V9 — شاشة العمليات</span></div>
+    <div><h1>القناص الأسطوري</h1><span id="modeTxt">V9.1 — شاشة العمليات</span></div>
   </div>
   <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
     <div class="badge" id="liveB"><span class="dot"></span><span id="liveT">البوت حي ✓</span></div>
@@ -145,13 +137,14 @@ margin-bottom:16px;display:flex;align-items:center;gap:10px;font-size:13px;color
 </div></header>
 
 <main>
-<div class="sbar">⏱️ آخر تحديث: <b id="lastUpd">الآن</b> • التحديث التلقائي كل 10 ثوانٍ</div>
+<div class="sbar">⏱️ آخر تحديث: <b id="lastUpd">الآن</b> • تحديث تلقائي كل 10 ثوانٍ</div>
 
 <div class="tabs">
   <button class="tab act" onclick="sw('overview',this)">📊 نظرة عامة</button>
   <button class="tab" onclick="sw('trades',this)">📂 الصفقات</button>
   <button class="tab" onclick="sw('signals',this)">📡 الإشارات</button>
   <button class="tab" onclick="sw('notifications',this)">🔔 الإشعارات <span id="nCount" class="tag ok" style="padding:1px 7px;font-size:10px">0</span></button>
+  <button class="tab" onclick="sw('performance',this)">📅 الأداء اليومي</button>
   <button class="tab" onclick="sw('tuner',this)">🧠 المطوّر</button>
   <button class="tab" onclick="sw('system',this)">⚙️ النظام</button>
 </div>
@@ -188,6 +181,13 @@ margin-bottom:16px;display:flex;align-items:center;gap:10px;font-size:13px;color
   <div class="sec"><h3>🔔 كل ما يقوم به البوت</h3><div class="feed" id="notifFeed"></div></div>
 </div>
 
+<!-- الأداء اليومي -->
+<div class="tc" id="t-performance">
+  <div class="sec"><h3>📅 اليوم الحالي</h3><div id="todayBox">—</div></div>
+  <div class="sec"><h3>🗓️ آخر 14 يوماً</h3><div id="daysBox">—</div></div>
+  <div class="sec"><h3>🏆 الإجماليات عبر التاريخ</h3><div id="aggBox">—</div></div>
+</div>
+
 <!-- المطوّر -->
 <div class="tc" id="t-tuner">
   <div class="grid" style="grid-template-columns:1fr 1fr">
@@ -214,7 +214,7 @@ margin-bottom:16px;display:flex;align-items:center;gap:10px;font-size:13px;color
   </div>
 </div>
 
-<div class="foot">🔥 القناص الأسطوري V9 — شاشة العمليات | الحماية عبر سرية الرابط</div>
+<div class="foot">🔥 القناص الأسطوري V9.1 — شاشة العمليات | الحماية عبر سرية الرابط</div>
 </main>
 
 <script>
@@ -223,7 +223,7 @@ let timer = null;
 
 async function api(path){
   const c = new AbortController();
-  const t = setTimeout(()=>c.abort(), 6000);   /* مهلة 6 ثوان — لا تعليق أبداً */
+  const t = setTimeout(()=>c.abort(), 6000);
   try{
     const res = await fetch(path, {signal:c.signal, cache:'no-store'});
     if(!res.ok) throw new Error('HTTP ' + res.status);
@@ -250,7 +250,7 @@ async function loadAll(){
     new Date().toLocaleTimeString('ar',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   document.getElementById('balance').textContent = '$' + (+ov.balance).toFixed(2);
   const mode = ov.trade_enabled ? (ov.testnet ? '⚔️ تداول تجريبي 🧪' : '⚔️ تداول حقيقي') : '👁️ مراقبة';
-  document.getElementById('modeTxt').textContent = mode + ' • V9';
+  document.getElementById('modeTxt').textContent = mode + ' • V9.1';
   document.getElementById('modeSub').textContent = ov.leverage+'x • $'+ov.trade_size+' • '+ov.pairs+' زوج';
 
   const dp = ov.today ? ov.today.pnl : 0;
@@ -306,6 +306,50 @@ async function loadAll(){
         + '<td><b>'+s.score+'/8</b></td><td>'+(s.trigger==='sweep'?'⚡ تصفية':'🔄 اختبار')+'</td><td>'+r+'</td></tr>';
     });
     sb.innerHTML = h + '</table>';
+  }
+
+  /* ✅ الأداء اليومي (V9.1) */
+  const dper = await api('/api/daily');
+  const tB = document.getElementById('todayBox');
+  if(tB && dper.today){
+    const t = dper.today;
+    const wr = (t.winrate !== null && t.winrate !== undefined) ? t.winrate + '%' : '—';
+    tB.innerHTML =
+      '<div class="grid" style="margin-bottom:0">'
+      + '<div class="card '+(t.pnl>=0?'g':'o')+'"><div class="l">💵 نتيجة اليوم</div><div class="v '+(t.pnl>=0?'pos':'neg')+'">'+mo(t.pnl)+'</div></div>'
+      + '<div class="card b"><div class="l">📂 صفقات اليوم</div><div class="v">'+t.total+'</div><div class="s">مباشر: '+(dper.trades_today_live||0)+'</div></div>'
+      + '<div class="card p"><div class="l">✅ رابحة</div><div class="v">'+t.wins+'</div></div>'
+      + '<div class="card o"><div class="l">❌ خاسرة</div><div class="v">'+t.losses+'</div></div>'
+      + '<div class="card y"><div class="l">🏆 نسبة الفوز</div><div class="v">'+wr+'</div><div class="s">نسبة الخسارة: '+(t.total>0?Math.round(100-(t.winrate||0))+'%':'—')+'</div></div>'
+      + '</div>';
+  }
+  const dB = document.getElementById('daysBox');
+  if(dB){
+    if(!dper.days || !dper.days.length){ dB.innerHTML = '<div class="empty">لا سجل أيام بعد — يُجمع تلقائياً مع كل صفقة</div>'; }
+    else{
+      let h = '<table><tr><th>اليوم</th><th>النتيجة</th><th>✅ رابحة</th><th>❌ خاسرة</th><th>المجموع</th><th>نسبة الفوز</th></tr>';
+      dper.days.forEach(d=>{
+        h += '<tr><td><b>'+d.date+'</b></td>'
+          + '<td class="'+(d.pnl>=0?'pos':'neg')+'"><b>'+mo(d.pnl)+'</b></td>'
+          + '<td style="color:var(--green)">'+d.wins+'</td>'
+          + '<td style="color:var(--red)">'+d.losses+'</td>'
+          + '<td>'+d.total+'</td>'
+          + '<td>'+(d.winrate!==null&&d.winrate!==undefined?d.winrate+'%':'—')+'</td></tr>';
+      });
+      dB.innerHTML = h + '</table>';
+    }
+  }
+  const aB = document.getElementById('aggBox');
+  if(aB && dper.aggregates){
+    const a = dper.aggregates;
+    aB.innerHTML =
+      '<div class="kv"><span>أيام نشطة (بصفقات)</span><b>'+a.active_days+'</b></div>'
+      + '<div class="kv"><span>إجمالي الصفقات المغلقة</span><b>'+a.total_closed+'</b></div>'
+      + '<div class="kv"><span>رابحة / خاسرة</span><b>'+a.total_wins+' / '+(a.total_closed - a.total_wins)+'</b></div>'
+      + '<div class="kv"><span>نسبة الفوز عبر التاريخ</span><b>'+(a.overall_winrate!==null&&a.overall_winrate!==undefined?a.overall_winrate+'%':'—')+'</b></div>'
+      + '<div class="kv"><span>إجمالي الربح/الخسارة</span><b class="'+(a.total_pnl>=0?'pos':'neg')+'">'+mo(a.total_pnl)+'</b></div>'
+      + (a.best_day?'<div class="kv"><span>🥇 أفضل يوم</span><b>'+a.best_day.date+' ('+mo(a.best_day.pnl)+')</b></div>':'')
+      + (a.worst_day?'<div class="kv"><span>💀 أسوأ يوم</span><b>'+a.worst_day.date+' ('+mo(a.worst_day.pnl)+')</b></div>':'');
   }
 
   const nf = await api('/api/notifications?after='+lastNid);
@@ -392,7 +436,6 @@ async function closeAll(){
   }catch(e){ alert('فشل: '+e.message); }
 }
 
-/* ✅ التشغيل: فوري + فشل مرئي بلا دائرة أبدية */
 async function boot(){
   try{
     await loadAll();
@@ -560,6 +603,70 @@ def create_app(bot):
             pass
         return j(out)
 
+    async def daily_performance(request):
+        """✅ V9.1: أداء كل الأيام من القاعدة"""
+        days = []
+        agg_c = agg_p = total_closed = total_wins = 0
+        best = worst = None
+        try:
+            async with aiosqlite.connect(bot.db.db_name) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                        "SELECT date, realized_pnl, wins, losses FROM daily_stats "
+                        "ORDER BY date DESC LIMIT 14") as cur:
+                    rows = await cur.fetchall()
+                for r in rows:
+                    w = r['wins'] or 0
+                    l = r['losses'] or 0
+                    total = w + l
+                    days.append({
+                        'date': r['date'],
+                        'pnl': round(r['pnl'] or 0, 4),
+                        'wins': w, 'losses': l, 'total': total,
+                        'winrate': round(w / total * 100, 1) if total > 0 else None,
+                    })
+                async with db.execute(
+                        "SELECT COUNT(*) c, COALESCE(SUM(realized_pnl),0) p FROM daily_stats "
+                        "WHERE wins + losses > 0") as cur:
+                    a = await cur.fetchone()
+                    agg_c, agg_p = a['c'], a['p']
+                async with db.execute(
+                        "SELECT date, realized_pnl FROM daily_stats "
+                        "WHERE wins + losses > 0 ORDER BY realized_pnl DESC LIMIT 1") as cur:
+                    best = await cur.fetchone()
+                async with db.execute(
+                        "SELECT date, realized_pnl FROM daily_stats "
+                        "WHERE wins + losses > 0 ORDER BY realized_pnl ASC LIMIT 1") as cur:
+                    worst = await cur.fetchone()
+                async with db.execute(
+                        "SELECT COUNT(*) c FROM signal_log WHERE result >= 0") as cur:
+                    total_closed = (await cur.fetchone())[0]
+                async with db.execute(
+                        "SELECT COUNT(*) c FROM signal_log WHERE result = 1") as cur:
+                    total_wins = (await cur.fetchone())[0]
+        except Exception:
+            pass
+        today = time.strftime('%Y-%m-%d')
+        today_data = next((d for d in days if d['date'] == today), None)
+        if not today_data:
+            today_data = {'date': today, 'pnl': 0, 'wins': 0, 'losses': 0,
+                          'total': 0, 'winrate': None}
+        return j({
+            'ok': True,
+            'today': today_data,
+            'days': days,
+            'aggregates': {
+                'active_days': agg_c,
+                'total_pnl': round(agg_p, 4),
+                'total_closed': total_closed,
+                'total_wins': total_wins,
+                'overall_winrate': round(total_wins / total_closed * 100, 1) if total_closed else None,
+                'best_day': {'date': best['date'], 'pnl': round(best['realized_pnl'], 4)} if best else None,
+                'worst_day': {'date': worst['date'], 'pnl': round(worst['realized_pnl'], 4)} if worst else None,
+            },
+            'trades_today_live': bot._trades_today(),
+        })
+
     async def notifications(request):
         after = int(request.query.get('after', 0))
         if PANEL_DB:
@@ -600,6 +707,7 @@ def create_app(bot):
     app.router.add_get('/api/trades', trades)
     app.router.add_get('/api/closed', closed)
     app.router.add_get('/api/signals', signals)
+    app.router.add_get('/api/daily', daily_performance)
     app.router.add_get('/api/notifications', notifications)
     app.router.add_get('/api/tuner-history', tuner_history)
     app.router.add_get('/api/errors', errors)
@@ -620,7 +728,7 @@ async def start_web_panel(bot):
         port = int(os.environ.get('PORT', '8080'))
         site = web.TCPSite(runner, '0.0.0.0', port)
         await site.start()
-        print(f'🖥️ لوحة القناص V9 تعمل على المنفذ {port} — دخول مباشر')
+        print(f'🖥️ لوحة القناص V9.1 تعمل على المنفذ {port} — دخول مباشر')
         return True
     except Exception as e:
         print(f'⚠️ فشل اللوحة (البوت يكمل عمله): {e}')
