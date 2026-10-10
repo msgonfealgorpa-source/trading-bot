@@ -820,10 +820,15 @@ def create_app(bot):
             data = await request.json()
         except Exception:
             data = {}
+        
+        entered_key = data.get('key', '') or request.headers.get('X-Admin-Key', '') or request.query.get('key', '')
+        
         if not ADMIN_KEY:
             return j({'ok': True, 'open': True})
-        if hmac.compare_digest(str(data.get('key', '')), ADMIN_KEY):
+            
+        if hmac.compare_digest(str(entered_key), ADMIN_KEY):
             return j({'ok': True})
+            
         return j({'ok': False, 'error': 'مفتاح غير صحيح'}, status=401)
 
     async def overview(request):
