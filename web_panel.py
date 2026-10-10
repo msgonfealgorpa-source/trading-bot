@@ -775,11 +775,22 @@ async def notify(kind, title, body='', level='info'):
         await PANEL_DB.add(kind, title, body, level)
 
 
-def _key_valid(request):
+async def _key_valid(request):
     if not ADMIN_KEY:
         return True
+    
+    # البحث في الهيدر أو الرابط أولاً
     k = request.headers.get('X-Admin-Key', '') or request.query.get('key', '') \
         or request.cookies.get('admin_key', '')
+    
+    if not k and request.method == 'POST':
+        # إذا لم يوجد في الهيدر، نقرأه من جسم الطلب (JSON Body)
+        try:
+            data = await request.json()
+            k = data.get('key', '')
+        except Exception:
+            pass
+            
     return hmac.compare_digest(str(k), ADMIN_KEY)
 
 
